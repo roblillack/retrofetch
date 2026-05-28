@@ -1,10 +1,11 @@
+[workspace]
+members = ["retrogui"]
+
 [package]
 name = "retrofetch"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-winit = "0.29"
-softbuffer = "0.4"
+retrogui = { path = "retrogui" }
 sysinfo = "0.30"
-font8x8 = "0.3"
