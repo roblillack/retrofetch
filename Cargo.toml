@@ -1,5 +1,5 @@
 [workspace]
-members = ["notepad", "retrogui"]
+members = ["filer", "notepad", "retrogui"]
 
 [package]
 name = "retrofetch"
