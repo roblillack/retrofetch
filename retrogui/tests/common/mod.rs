@@ -51,17 +51,28 @@ fn snapshot_one(
         .with_scale(scale)
         .with_font(sans_font())
         .with_mono_font(mono_font());
+    // Always render: this exercises the full paint pipeline on every platform
+    // and catches panics or size regressions everywhere `cargo test` runs.
     let snap = backend.render(widget.as_mut());
-    let snap_name = format!("{}_{}.png", name, scale_tag(scale));
-    let mut settings = insta::Settings::clone_current();
-    settings.set_prepend_module_to_snapshot(false);
-    // Pin the snapshot path to a single dedicated directory so every
-    // test's artifacts live next to each other regardless of which
-    // helper function actually called insta.
-    settings.set_snapshot_path("../snapshots");
-    settings.bind(|| {
-        insta::assert_binary_snapshot!(snap_name.as_str(), snap.to_png());
-    });
+
+    // The checked-in PNG baselines are byte-exact and were baked on the
+    // linux/x86_64 reference. fontdue rasterizes glyphs with f32 math whose
+    // rounding differs by a pixel or two across architectures (e.g. aarch64 vs
+    // x86_64), so a byte-exact comparison only holds on the reference platform.
+    // Elsewhere we stop after the render above. Regenerate baselines on
+    // linux/x86_64 with `cargo insta review`.
+    if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        let snap_name = format!("{}_{}.png", name, scale_tag(scale));
+        let mut settings = insta::Settings::clone_current();
+        settings.set_prepend_module_to_snapshot(false);
+        // Pin the snapshot path to a single dedicated directory so every
+        // test's artifacts live next to each other regardless of which
+        // helper function actually called insta.
+        settings.set_snapshot_path("../snapshots");
+        settings.bind(|| {
+            insta::assert_binary_snapshot!(snap_name.as_str(), snap.to_png());
+        });
+    }
 }
 
 fn scale_tag(scale: f32) -> String {

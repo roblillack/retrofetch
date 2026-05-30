@@ -548,12 +548,11 @@ impl SnakeGame {
                 Key::Named(NamedKey::Down) => {
                     self.queue_direction(Direction::Down);
                 }
-                Key::Named(NamedKey::Space) => {
-                    if self.game_over {
+                Key::Named(NamedKey::Space)
+                    if self.game_over => {
                         self.reset();
                         ctx.request_paint();
                     }
-                }
                 _ => {}
             },
             Event::Tick => {
