@@ -32,4 +32,7 @@ arboard = { version = "3", default-features = false, features = ["wayland-data-c
 arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
-insta = "1"
+# Snapshot tests decode their baseline PNGs for a tolerant pixel comparison
+# (see tests/common/mod.rs). `png` is also a normal dependency above, but
+# integration tests only see dev-dependencies, so it's listed again here.
+png = "0.17"
