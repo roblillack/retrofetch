@@ -85,13 +85,17 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
     });
     let (bw, bh, base) = decode_rgba(&baseline, &path);
 
-    assert!(
-        bw as i32 == snap.width() && bh as i32 == snap.height(),
-        "snapshot `{name}` @ {scale}x: size changed (baseline {bw}x{bh}, rendered {}x{}). \
-         Run `UPDATE_SNAPSHOTS=1 cargo test -p retrogui` if this is intended.",
-        snap.width(),
-        snap.height(),
-    );
+    if bw as i32 != snap.width() || bh as i32 != snap.height() {
+        let actual = write_actual_render(&snap, name, scale);
+        panic!(
+            "snapshot `{name}` @ {scale}x: size changed (baseline {bw}x{bh}, rendered {}x{}). \
+             Rendered frame written to {}. Run `UPDATE_SNAPSHOTS=1 cargo test -p retrogui` if \
+             this is intended.",
+            snap.width(),
+            snap.height(),
+            actual.display(),
+        );
+    }
 
     // Compare the rendered ARGB32 framebuffer against the decoded RGBA
     // baseline. For each pixel we take the largest per-channel delta; the
@@ -124,14 +128,29 @@ fn snapshot_one(name: &str, width: i32, height: i32, scale: f32, mut widget: Box
         }
     }
 
-    assert!(
-        offenders == 0,
-        "snapshot `{name}` @ {scale}x differs from baseline: {offenders} pixel(s) off by more \
-         than {MAX_CHANNEL_DELTA}/255 (largest channel delta {max_delta}, first at {first_offender:?}). \
-         If this is an intended rendering change, regenerate with \
-         `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`; otherwise it is a regression. Baseline: {}",
-        path.display(),
-    );
+    if offenders > 0 {
+        let actual = write_actual_render(&snap, name, scale);
+        panic!(
+            "snapshot `{name}` @ {scale}x differs from baseline: {offenders} pixel(s) off by more \
+             than {MAX_CHANNEL_DELTA}/255 (largest channel delta {max_delta}, first at \
+             {first_offender:?}). Rendered frame written to {} (uploaded as a CI artifact on \
+             failure). If this is an intended rendering change, regenerate with \
+             `UPDATE_SNAPSHOTS=1 cargo test -p retrogui`; otherwise it is a regression. \
+             Baseline: {}",
+            actual.display(),
+            path.display(),
+        );
+    }
+}
+
+/// On a mismatch, dump the freshly rendered frame next to its baseline as
+/// `<name>_<scale>.snap.actual.png` so the failure can be eyeballed locally and
+/// uploaded as a CI artifact (these files are git-ignored). Best-effort: a
+/// write error must not mask the assertion failure that triggered it.
+fn write_actual_render(snap: &retrogui::mock::Snapshot, name: &str, scale: f32) -> PathBuf {
+    let path = snapshot_path(&format!("{}_{}.snap.actual.png", name, scale_tag(scale)));
+    let _ = std::fs::write(&path, snap.to_png());
+    path
 }
 
 /// Absolute path to a file in the checked-in snapshot directory.
