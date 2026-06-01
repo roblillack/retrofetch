@@ -74,7 +74,10 @@ fn build_about_box(info: &SystemInfo) -> Container {
     // without overlapping it.
     let text_w = (CONTENT_WIDTH - 78) - text_x - 6;
     let mut text_y = logo_y + 6;
-    root.push(Label::new(Rect::new(text_x, text_y, text_w, 16), info.os_name.clone()));
+    root.push(Label::new(
+        Rect::new(text_x, text_y, text_w, 16),
+        info.os_name.clone(),
+    ));
     text_y += 14;
     root.push(Label::new(
         Rect::new(text_x, text_y, text_w, 16),
@@ -87,12 +90,9 @@ fn build_about_box(info: &SystemInfo) -> Container {
     ));
 
     root.push(
-        Button::new(
-            Rect::new(CONTENT_WIDTH - 78, content_y + 12, 60, 22),
-            "OK",
-        )
-        .default(true)
-        .on_click(|cx| cx.close()),
+        Button::new(Rect::new(CONTENT_WIDTH - 78, content_y + 12, 60, 22), "OK")
+            .default(true)
+            .on_click(|cx| cx.close()),
     );
 
     let license_x = content_x + 90;
@@ -434,8 +434,7 @@ impl SnakeGame {
         let (dx, dy) = self.direction.delta();
         let head = (hx + dx, hy + dy);
 
-        let hit_wall =
-            head.0 < 0 || head.0 >= self.grid_w || head.1 < 0 || head.1 >= self.grid_h;
+        let hit_wall = head.0 < 0 || head.0 >= self.grid_w || head.1 < 0 || head.1 >= self.grid_h;
         // Tail tip moves out of the way every step, so it isn't a
         // collision unless we're growing this frame.
         let will_grow = head == self.food;
@@ -508,11 +507,7 @@ impl SnakeGame {
         // Snake: head darker than the body so the direction is readable.
         for (i, &(x, y)) in self.body.iter().enumerate() {
             let r = cell_rect(x, y).inset(1);
-            let color = if i == 0 {
-                Color::BLACK
-            } else {
-                Color::NAVY
-            };
+            let color = if i == 0 { Color::BLACK } else { Color::NAVY };
             painter.fill_rect(r, color);
         }
 
@@ -532,12 +527,7 @@ impl SnakeGame {
         if self.game_over {
             // Game-over banner stays inside the playfield so it never
             // overlaps the HUD strips.
-            let banner = Rect::new(
-                play.x + play.w / 2 - 80,
-                play.y + play.h / 2 - 18,
-                160,
-                36,
-            );
+            let banner = Rect::new(play.x + play.w / 2 - 80, play.y + play.h / 2 - 18, 160, 36);
             painter.fill_rect(banner, Color::WHITE);
             painter.stroke_rect(banner, Color::BLACK);
             painter.text_centered(banner, "GAME OVER", 16.0, Color::RED);
@@ -559,11 +549,10 @@ impl SnakeGame {
                 Key::Named(NamedKey::Down) => {
                     self.queue_direction(Direction::Down);
                 }
-                Key::Named(NamedKey::Space)
-                    if self.game_over => {
-                        self.reset();
-                        ctx.request_paint();
-                    }
+                Key::Named(NamedKey::Space) if self.game_over => {
+                    self.reset();
+                    ctx.request_paint();
+                }
                 _ => {}
             },
             Event::Tick => {
