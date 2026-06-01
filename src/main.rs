@@ -105,10 +105,9 @@ fn build_about_box(info: &SystemInfo) -> Container {
     // higher with room above the rule.
     let ok_w = 72;
     let ok_h = 24;
-    let header_w = (CONTENT_RIGHT - ok_w - 8) - VALUE_X;
     let machine_top = 24;
-    let machine_box = Rect::new(VALUE_X, machine_top, header_w, 26);
-    let os_box = Rect::new(VALUE_X, machine_top + 24, header_w, ROW_H);
+    let machine_box = Rect::new(VALUE_X, machine_top, RULE_W, 26);
+    let os_box = Rect::new(VALUE_X, machine_top + 24, RULE_W, ROW_H);
 
     // Vertical rhythm: two rules carving Overview | Hardware | Software.
     let rule1_y = os_box.bottom() + RULE_GAP;
@@ -727,12 +726,12 @@ fn gather_system_info() -> SystemInfo {
     // Firmware-reported hardware identity. `Product` is unimplemented on some
     // platforms (e.g. NetBSD), so treat every field as optional.
     let vendor = Product::vendor_name().map(|v| v.trim().to_string());
-    let model = Product::family()
+    let family = Product::family()
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
     // Overview headline: the friendly model name, or the short hostname when no
     // model is reported ("peregrine" rather than "peregrine.fritz.box").
-    let machine = match &model {
+    let machine = match &family {
         Some(model) => prettify_model(model),
         None => short_hostname(),
     };
@@ -741,7 +740,7 @@ fn gather_system_info() -> SystemInfo {
         machine,
         operating_system,
         vendor,
-        model,
+        model: Product::name(),
         cpu,
         memory_line,
         disk_line,
