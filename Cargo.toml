@@ -2,9 +2,22 @@
 name = "retrofetch"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "A retro 'About This Computer' system info screen for your desktop"
+authors = ["Robert Lillack <rob@lillack.net>"]
+repository = "https://github.com/roblillack/retrofetch"
+homepage = "https://github.com/roblillack/retrofetch"
+license = "MIT"
+readme = "README.md"
+keywords = ["neofetch", "system-info", "fetch", "retro", "gui"]
+categories = ["command-line-utilities", "gui"]
+
+# The screenshot is only used by the README on GitHub/crates.io (via an absolute
+# URL), so it doesn't need to ship inside the published crate.
+exclude = ["screenshot.png"]
 
 [dependencies]
-saudade = { path = "../saudade" }
+saudade = "0.1"
 sysinfo = "0.39"
 resvg = "0.42"
 regex = "1"
