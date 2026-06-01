@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use resvg::{tiny_skia, usvg};
 use saudade::EventCtx;
 use saudade::{
     App, Bevel, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
@@ -11,15 +12,16 @@ use sysinfo::{Disks, System};
 const CONTENT_WIDTH: i32 = 395;
 const CONTENT_HEIGHT: i32 = 305;
 
-const LOGO_RED: Color = Color::RED;
-const LOGO_GREEN: Color = Color::GREEN;
-const LOGO_BLUE: Color = Color::NAVY;
-const LOGO_YELLOW: Color = Color::YELLOW;
+/// Position and size of the OS logo inside the about box, in the root widget's
+/// logical coordinate system.
+const LOGO_X: i32 = 16;
+const LOGO_Y: i32 = 22;
+const LOGO_W: i32 = 48;
+const LOGO_H: i32 = 48;
 
-/// Bounding box of the four-square Windows logo inside the about box,
-/// in the root widget's logical coordinate system. Five clicks here
-/// within `EASTER_EGG_WINDOW` swap the about chrome for a Snake game.
-const LOGO_HIT: Rect = Rect::new(16, 22, 40, 28);
+/// Bounding box of the OS logo. Five clicks here within `EASTER_EGG_WINDOW`
+/// swap the about chrome for a Snake game.
+const LOGO_HIT: Rect = Rect::new(LOGO_X, LOGO_Y, LOGO_W, LOGO_H);
 const EASTER_EGG_CLICKS: usize = 5;
 const EASTER_EGG_WINDOW: Duration = Duration::from_secs(2);
 
@@ -59,21 +61,13 @@ fn build_about_box(info: &SystemInfo) -> Container {
     let content_x = 4;
     let content_y = 4;
 
-    let logo_x = content_x + 12;
-    let logo_y = content_y + 18;
-    root.push(build_windows_logo(logo_x, logo_y));
+    root.push(build_os_logo(LOGO_X, LOGO_Y, LOGO_W, LOGO_H));
 
-    // Compact labels under the logo. Their boxes start in the logo's column;
-    // the text is small enough not to bleed into the system-info text on the
-    // right, so a generous box width just keeps it from being clipped.
-    root.push(Label::new(Rect::new(logo_x - 2, logo_y + 30, 80, 12), "MICROSOFT").with_size(8.0));
-    root.push(Label::new(Rect::new(logo_x + 4, logo_y + 40, 80, 12), "WINDOWS").with_size(8.0));
-
-    let text_x = logo_x + 56;
+    let text_x = LOGO_X + 56;
     // Stop the info lines short of the OK button so they share the top strip
     // without overlapping it.
     let text_w = (CONTENT_WIDTH - 78) - text_x - 6;
-    let mut text_y = logo_y + 6;
+    let mut text_y = LOGO_Y + 6;
     root.push(Label::new(
         Rect::new(text_x, text_y, text_w, 16),
         info.os_name.clone(),
@@ -144,28 +138,97 @@ fn build_about_box(info: &SystemInfo) -> Container {
     root
 }
 
-/// 40×28 four-square Windows logo with a black frame — drawn procedurally so
-/// retrofetch ships without any image assets.
-fn build_windows_logo(x: i32, y: i32) -> Image {
-    let width = 40;
-    let height = 28;
-    let mut img = Image::new(x, y, width, height);
-
-    img.fill_rect(Rect::new(2, 2, 16, 10), LOGO_RED);
-    img.fill_rect(Rect::new(20, 4, 16, 10), LOGO_GREEN);
-    img.fill_rect(Rect::new(2, 14, 16, 10), LOGO_BLUE);
-    img.fill_rect(Rect::new(20, 16, 16, 10), LOGO_YELLOW);
-
-    for xx in 1..width - 1 {
-        img.set_pixel(xx, 1, Color::BLACK);
-        img.set_pixel(xx, height - 2, Color::BLACK);
+/// Build the OS-logo image: detect the host OS/distro, rasterize its embedded
+/// SVG into the logo box, and hand the pixels to an [`Image`] widget. If the
+/// SVG can't be parsed/rendered the logo is simply left blank rather than
+/// failing the whole dialog.
+fn build_os_logo(x: i32, y: i32, w: i32, h: i32) -> Image {
+    let svg = logo_svg_for(&System::distribution_id());
+    match rasterize_logo(svg, w, h) {
+        Some(pixels) => Image::from_pixels(x, y, w, h, pixels),
+        None => Image::new(x, y, w, h),
     }
-    for yy in 1..height - 1 {
-        img.set_pixel(1, yy, Color::BLACK);
-        img.set_pixel(width - 2, yy, Color::BLACK);
-    }
+}
 
-    img
+/// Pick the logo SVG for an os-release `ID` (as returned by
+/// [`System::distribution_id`], which falls back to [`std::env::consts::OS`]
+/// when there is no os-release file — that is how the BSDs and macOS/Windows
+/// are matched). Known major distros, the BSDs, macOS and Windows get their
+/// own mark; everything else — including unrecognised Linux distros and the
+/// bare `"linux"` fallback — falls back to the generic Tux penguin.
+fn logo_svg_for(distribution_id: &str) -> &'static str {
+    const APPLE: &str = include_str!("../assets/os/apple.svg");
+    const ARCH: &str = include_str!("../assets/os/arch.svg");
+    const DEBIAN: &str = include_str!("../assets/os/debian.svg");
+    const FEDORA: &str = include_str!("../assets/os/fedora.svg");
+    const FREEBSD: &str = include_str!("../assets/os/freebsd.svg");
+    const MINT: &str = include_str!("../assets/os/linuxmint.svg");
+    const MANJARO: &str = include_str!("../assets/os/manjaro.svg");
+    const NETBSD: &str = include_str!("../assets/os/netbsd.svg");
+    const NIXOS: &str = include_str!("../assets/os/nixos.svg");
+    const OPENBSD: &str = include_str!("../assets/os/openbsd.svg");
+    const OPENSUSE: &str = include_str!("../assets/os/opensuse.svg");
+    const TUX: &str = include_str!("../assets/os/tux.svg");
+    const UBUNTU: &str = include_str!("../assets/os/ubuntu.svg");
+    const WINDOWS: &str = include_str!("../assets/os/windows.svg");
+
+    match distribution_id {
+        "ubuntu" => UBUNTU,
+        "debian" => DEBIAN,
+        "fedora" => FEDORA,
+        "arch" => ARCH,
+        "manjaro" => MANJARO,
+        "linuxmint" => MINT,
+        "nixos" => NIXOS,
+        "macos" => APPLE,
+        "windows" => WINDOWS,
+        "freebsd" => FREEBSD,
+        "openbsd" => OPENBSD,
+        "netbsd" => NETBSD,
+        // openSUSE ships several IDs: "opensuse", "opensuse-leap",
+        // "opensuse-tumbleweed", ...
+        id if id.starts_with("opensuse") => OPENSUSE,
+        _ => TUX,
+    }
+}
+
+/// Rasterize an SVG into a `w`×`h` ARGB32 buffer for [`Image::from_pixels`].
+///
+/// `tiny_skia` renders premultiplied RGBA. The `Image` widget skips fully
+/// transparent pixels and otherwise writes the colour opaquely (it does not
+/// blend), so anti-aliased edges are composited over white — the about-box
+/// background — here, and fully transparent pixels are left transparent so
+/// that background still shows through.
+fn rasterize_logo(svg: &str, w: i32, h: i32) -> Option<Vec<u32>> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let (w, h) = (w as u32, h as u32);
+
+    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
+    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
+
+    // Scale the SVG to fit the box while preserving aspect ratio, then centre.
+    let size = tree.size();
+    let scale = (w as f32 / size.width()).min(h as f32 / size.height());
+    let tx = (w as f32 - size.width() * scale) * 0.5;
+    let ty = (h as f32 - size.height() * scale) * 0.5;
+    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(tx, ty);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+    let mut out = vec![0u32; (w * h) as usize];
+    for (px, chunk) in out.iter_mut().zip(pixmap.data().chunks_exact(4)) {
+        let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+        if a == 0 {
+            continue;
+        }
+        // Premultiplied source over an opaque white background:
+        // out = src + white * (1 - a). With white == 255, that is src + (255 - a).
+        let inv = 255 - a as u32;
+        let comp = |c: u8| (c as u32 + inv).min(255);
+        *px = 0xFF00_0000 | (comp(r) << 16) | (comp(g) << 8) | comp(b);
+    }
+    Some(out)
 }
 
 /// Root widget. Normally a transparent wrapper around the about-box

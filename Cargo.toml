@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 saudade = { path = "../saudade" }
 sysinfo = "0.30"
+resvg = "0.42"
