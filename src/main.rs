@@ -663,16 +663,32 @@ impl SnakeGame {
 // -------------------------------------------------------------------- sysinfo
 
 fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
+    const KB: f64 = 1000.0;
+    const MB: f64 = KB * 1000.0;
+    const GB: f64 = MB * 1000.0;
     let bytes_f = bytes as f64;
     if bytes_f >= GB {
         format!("{:.1} GB", bytes_f / GB)
     } else if bytes_f >= MB {
         format!("{:.1} MB", bytes_f / MB)
     } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
+        format!("{:.1} kB", bytes_f / KB)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+fn format_binary_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= GB {
+        format!("{:.1} GiB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.1} MiB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.1} KiB", bytes_f / KB)
     } else {
         format!("{} B", bytes)
     }
@@ -702,7 +718,7 @@ fn gather_system_info() -> SystemInfo {
         })
         .unwrap_or_else(|| "Unknown CPU".to_string());
 
-    let memory_line = format_bytes(sys.total_memory());
+    let memory_line = format_binary_bytes(sys.total_memory());
 
     let disks = Disks::new_with_refreshed_list();
     let mut total_disk = 0u64;
