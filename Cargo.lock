@@ -419,13 +419,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "filer"
-version = "0.1.0"
-dependencies = [
- "retrogui",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -782,13 +775,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df9761775871bdef83bee530e60050f7e54b1105350d6884eb0fb4f46c2f9405"
 dependencies = [
  "memchr",
-]
-
-[[package]]
-name = "notepad"
-version = "0.1.0"
-dependencies = [
- "retrogui",
 ]
 
 [[package]]
@@ -1171,13 +1157,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "picker"
-version = "0.1.0"
-dependencies = [
- "retrogui",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1335,23 +1314,8 @@ dependencies = [
 name = "retrofetch"
 version = "0.1.0"
 dependencies = [
- "retrogui",
+ "saudade",
  "sysinfo",
-]
-
-[[package]]
-name = "retrogui"
-version = "0.1.0"
-dependencies = [
- "arboard",
- "fontdb",
- "fontdue",
- "png",
- "smithay-client-toolkit",
- "softbuffer",
- "wayland-client",
- "wayland-protocols",
- "winit",
 ]
 
 [[package]]
@@ -1408,6 +1372,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "saudade"
+version = "0.1.0"
+dependencies = [
+ "arboard",
+ "fontdb",
+ "fontdue",
+ "png",
+ "smithay-client-toolkit",
+ "softbuffer",
+ "wayland-client",
+ "wayland-protocols",
+ "winit",
 ]
 
 [[package]]

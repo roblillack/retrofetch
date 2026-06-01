@@ -1,8 +1,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use retrogui::EventCtx;
-use retrogui::{
+use saudade::EventCtx;
+use saudade::{
     App, Bevel, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
@@ -60,24 +60,26 @@ fn build_about_box(info: &SystemInfo) -> Container {
     let logo_y = content_y + 18;
     root.push(build_windows_logo(logo_x, logo_y));
 
-    // Compact labels under the logo — small enough to stay within the logo's
-    // 40px column so they don't bleed into the system-info text on the right.
-    root.push(Label::new(logo_x - 2, logo_y + 30, "MICROSOFT").with_size(8.0));
-    root.push(Label::new(logo_x + 4, logo_y + 40, "WINDOWS").with_size(8.0));
+    // Compact labels under the logo. Their boxes start in the logo's column;
+    // the text is small enough not to bleed into the system-info text on the
+    // right, so a generous box width just keeps it from being clipped.
+    root.push(Label::new(Rect::new(logo_x - 2, logo_y + 30, 80, 12), "MICROSOFT").with_size(8.0));
+    root.push(Label::new(Rect::new(logo_x + 4, logo_y + 40, 80, 12), "WINDOWS").with_size(8.0));
 
     let text_x = logo_x + 56;
+    // Stop the info lines short of the OK button so they share the top strip
+    // without overlapping it.
+    let text_w = (CONTENT_WIDTH - 78) - text_x - 6;
     let mut text_y = logo_y + 6;
-    root.push(Label::new(text_x, text_y, info.os_name.clone()));
+    root.push(Label::new(Rect::new(text_x, text_y, text_w, 16), info.os_name.clone()));
     text_y += 14;
     root.push(Label::new(
-        text_x,
-        text_y,
+        Rect::new(text_x, text_y, text_w, 16),
         format!("Version {}", info.os_version),
     ));
     text_y += 14;
     root.push(Label::new(
-        text_x,
-        text_y,
+        Rect::new(text_x, text_y, text_w, 16),
         format!("Kernel {}", info.kernel),
     ));
 
@@ -90,20 +92,19 @@ fn build_about_box(info: &SystemInfo) -> Container {
         .on_click(|cx| cx.close()),
     );
 
+    let license_x = content_x + 90;
+    let license_w = CONTENT_WIDTH - license_x - 6;
     let license_y = content_y + 108;
     root.push(Label::new(
-        content_x + 90,
-        license_y,
+        Rect::new(license_x, license_y, license_w, 16),
         "This product is licensed to:",
     ));
     root.push(Label::new(
-        content_x + 90,
-        license_y + 14,
+        Rect::new(license_x, license_y + 14, license_w, 16),
         info.licensed_to.clone(),
     ));
     root.push(Label::new(
-        content_x + 90,
-        license_y + 28,
+        Rect::new(license_x, license_y + 28, license_w, 16),
         info.licensed_org.clone(),
     ));
 
@@ -113,20 +114,19 @@ fn build_about_box(info: &SystemInfo) -> Container {
         CONTENT_WIDTH - 40,
     ));
 
+    let stats_x = content_x + 22;
+    let stats_w = CONTENT_WIDTH - stats_x - 6;
     let stats_y = license_y + 72;
     root.push(Label::new(
-        content_x + 22,
-        stats_y,
+        Rect::new(stats_x, stats_y, stats_w, 16),
         format!("CPU: {}", info.cpu),
     ));
     root.push(Label::new(
-        content_x + 22,
-        stats_y + 16,
+        Rect::new(stats_x, stats_y + 16, stats_w, 16),
         format!("Memory: {}", info.memory_line),
     ));
     root.push(Label::new(
-        content_x + 22,
-        stats_y + 32,
+        Rect::new(stats_x, stats_y + 32, stats_w, 16),
         format!("Disk: {}", info.disk_line),
     ));
 

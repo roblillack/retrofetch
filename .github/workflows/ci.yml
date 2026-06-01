@@ -45,16 +45,5 @@ jobs:
           cargo test --workspace --all-targets --all-features
           cargo test --workspace --doc
 
-      # If a snapshot mismatches on this OS, the test dumps the rendered frame
-      # next to its baseline; upload those so the diff can be inspected (and a
-      # per-platform baseline regenerated if rendering legitimately differs).
-      - name: Upload snapshot diffs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: snapshot-diffs-${{ matrix.os }}
-          path: retrogui/tests/snapshots/*.snap.actual.png
-          if-no-files-found: ignore
-
       - name: Build (release)
         run: cargo build --workspace --release

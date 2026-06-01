@@ -1,11 +1,8 @@
-[workspace]
-members = ["filer", "notepad", "picker", "retrogui"]
-
 [package]
 name = "retrofetch"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-retrogui = { path = "retrogui" }
+saudade = { path = "../saudade" }
 sysinfo = "0.30"
