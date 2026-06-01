@@ -30,6 +30,11 @@ struct SystemInfo {
     cpu: String,
     memory_line: String,
     disk_line: String,
+    /// pfetch-style full OS name (e.g. "macOS 26.0"), as opposed to `os_name`
+    /// which is the bare kernel/OS identifier (e.g. "Darwin").
+    operating_system: String,
+    /// Human-readable uptime, formatted like pfetch ("1d 3h 20m").
+    uptime: String,
     licensed_to: String,
     licensed_org: String,
 }
@@ -117,15 +122,23 @@ fn build_about_box(info: &SystemInfo) -> Container {
     let stats_y = license_y + 72;
     root.push(Label::new(
         Rect::new(stats_x, stats_y, stats_w, 16),
-        format!("CPU: {}", info.cpu),
+        format!("OS: {}", info.operating_system),
     ));
     root.push(Label::new(
         Rect::new(stats_x, stats_y + 16, stats_w, 16),
-        format!("Memory: {}", info.memory_line),
+        format!("CPU: {}", info.cpu),
     ));
     root.push(Label::new(
         Rect::new(stats_x, stats_y + 32, stats_w, 16),
+        format!("Memory: {}", info.memory_line),
+    ));
+    root.push(Label::new(
+        Rect::new(stats_x, stats_y + 48, stats_w, 16),
         format!("Disk: {}", info.disk_line),
+    ));
+    root.push(Label::new(
+        Rect::new(stats_x, stats_y + 64, stats_w, 16),
+        format!("Uptime: {}", info.uptime),
     ));
 
     root
@@ -571,18 +584,6 @@ impl SnakeGame {
 
 // -------------------------------------------------------------------- sysinfo
 
-fn format_number(value: u64) -> String {
-    let digits: Vec<char> = value.to_string().chars().rev().collect();
-    let mut out = String::new();
-    for (idx, ch) in digits.iter().enumerate() {
-        if idx > 0 && idx % 3 == 0 {
-            out.push(',');
-        }
-        out.push(*ch);
-    }
-    out.chars().rev().collect()
-}
-
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
@@ -623,8 +624,14 @@ fn gather_system_info() -> SystemInfo {
         })
         .unwrap_or_else(|| "Unknown CPU".to_string());
 
-    let mem_free = sys.free_memory();
-    let memory_line = format!("{} KB Free", format_number(mem_free));
+    // Report memory the way pfetch does: used / total. `free_memory` alone is
+    // misleading on macOS (it excludes reclaimable cache, so it reads as nearly
+    // zero); used vs. total is the figure people actually want.
+    let memory_line = format!(
+        "{} / {}",
+        format_bytes(sys.used_memory()),
+        format_bytes(sys.total_memory())
+    );
 
     let disks = Disks::new_with_refreshed_list();
     let mut total_disk = 0u64;
@@ -643,6 +650,11 @@ fn gather_system_info() -> SystemInfo {
         "Disk information unavailable".to_string()
     };
 
+    // pfetch's "os" field is the friendly long OS name (e.g. "macOS 26.0"),
+    // which is exactly what `long_os_version` resolves to here.
+    let operating_system = os_version.clone();
+    let uptime = seconds_to_string(System::uptime());
+
     let licensed_to = std::env::var("USER")
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_else(|_| "User".to_string());
@@ -655,7 +667,36 @@ fn gather_system_info() -> SystemInfo {
         cpu,
         memory_line,
         disk_line,
+        operating_system,
+        uptime,
         licensed_to,
         licensed_org,
     }
+}
+
+/// Format an uptime in seconds the way pfetch does: the largest non-zero
+/// units only, e.g. "1d 3h 20m" or "45m". Minutes are always shown so a
+/// freshly booted machine reads "0m" rather than an empty string.
+fn seconds_to_string(seconds: u64) -> String {
+    let days = seconds / 86_400;
+    let hours = (seconds % 86_400) / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+
+    let mut result = String::new();
+    if days > 0 {
+        result.push_str(&format!("{}d", days));
+    }
+    if hours > 0 {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        result.push_str(&format!("{}h", hours));
+    }
+    if minutes > 0 || result.is_empty() {
+        if !result.is_empty() {
+            result.push(' ');
+        }
+        result.push_str(&format!("{}m", minutes));
+    }
+    result
 }
