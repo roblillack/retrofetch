@@ -1,23 +1,24 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use regex::Regex;
 use resvg::{tiny_skia, usvg};
 use saudade::EventCtx;
 use saudade::{
-    App, Bevel, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
+    App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
-use sysinfo::{Disks, System};
+use sysinfo::{Disks, Product, System};
 
-const CONTENT_WIDTH: i32 = 395;
-const CONTENT_HEIGHT: i32 = 305;
+const CONTENT_WIDTH: i32 = 320;
 
-/// Position and size of the OS logo inside the about box, in the root widget's
-/// logical coordinate system.
+/// Position and size of the OS logo in the Overview section, in the root
+/// widget's logical coordinate system. The overall window height is derived
+/// from the stacked sections at build time rather than fixed.
 const LOGO_X: i32 = 16;
-const LOGO_Y: i32 = 22;
-const LOGO_W: i32 = 48;
-const LOGO_H: i32 = 48;
+const LOGO_Y: i32 = 12;
+const LOGO_W: i32 = 56;
+const LOGO_H: i32 = 56;
 
 /// Bounding box of the OS logo. Five clicks here within `EASTER_EGG_WINDOW`
 /// swap the about chrome for a Snake game.
@@ -26,116 +27,142 @@ const EASTER_EGG_CLICKS: usize = 5;
 const EASTER_EGG_WINDOW: Duration = Duration::from_secs(2);
 
 struct SystemInfo {
-    os_name: String,
-    os_version: String,
-    kernel: String,
+    /// Headline shown large in the Overview group: the friendly model name
+    /// (e.g. "MacBook Pro"), or the short hostname when the OS exposes no
+    /// product info (e.g. NetBSD).
+    machine: String,
+    /// pfetch-style full OS name (e.g. "macOS 26.5"). Shown under the machine
+    /// name as the Overview's second line.
+    operating_system: String,
+    /// Hardware vendor as reported by the firmware (e.g. "Apple Inc."). Shown
+    /// in the Hardware group; `None` hides the row where unavailable.
+    vendor: Option<String>,
+    /// Raw machine model identifier (e.g. "MacBookPro18,3", "20AN"). Shown in
+    /// the Hardware group; `None` hides the row where the OS has no such id.
+    model: Option<String>,
     cpu: String,
     memory_line: String,
     disk_line: String,
-    /// pfetch-style full OS name (e.g. "macOS 26.0"), as opposed to `os_name`
-    /// which is the bare kernel/OS identifier (e.g. "Darwin").
-    operating_system: String,
+    /// Kernel name and version (e.g. "Darwin 25.5.0"). Shown in the Software
+    /// group.
+    kernel: String,
     /// Human-readable uptime, formatted like pfetch ("1d 3h 20m").
     uptime: String,
-    licensed_to: String,
-    licensed_org: String,
 }
 
 fn main() {
     let info = gather_system_info();
 
     let about = build_about_box(&info);
+    // The box sizes its own height from the stacked group boxes; match the
+    // window to it so there's no dead strip at the bottom.
+    let height = about.bounds().h;
     let root = AboutWithEasterEgg::new(about);
 
     App::new(
-        WindowConfig::new("About Retrofetch", CONTENT_WIDTH, CONTENT_HEIGHT),
+        WindowConfig::new("About This Computer", CONTENT_WIDTH, height),
         root,
     )
     .with_theme(Theme::windows_31())
     .run();
 }
 
+/// Horizontal layout columns (logical px). The logo, key labels and the rules
+/// all left-align to `KEY_X`; the detail values and the Overview header text
+/// all left-align to `VALUE_X`, so the big machine name sits over the value
+/// column of the sections below it.
+const RULE_X: i32 = 16;
+const RULE_W: i32 = CONTENT_WIDTH - 2 * RULE_X;
+const CONTENT_RIGHT: i32 = RULE_X + RULE_W;
+const KEY_X: i32 = RULE_X;
+const VALUE_X: i32 = 90;
+/// Height of one key/value detail row.
+const ROW_H: i32 = 18;
+/// Gap between a section's last line and the rule beneath it. Applied to both
+/// rules so the Overview text clears the first rule by the same amount the
+/// Disk row clears the second.
+const RULE_GAP: i32 = 8;
+
 fn build_about_box(info: &SystemInfo) -> Container {
-    let mut root = Container::new(CONTENT_WIDTH, CONTENT_HEIGHT);
+    // Hardware rows: vendor and model only when the OS reports them.
+    let mut hardware: Vec<(&str, &str)> = Vec::new();
+    if let Some(vendor) = &info.vendor {
+        hardware.push(("Vendor", vendor));
+    }
+    if let Some(model) = &info.model {
+        hardware.push(("Model", model));
+    }
+    hardware.push(("CPU", &info.cpu));
+    hardware.push(("Memory", &info.memory_line));
+    hardware.push(("Disk", &info.disk_line));
 
-    let content_x = 4;
-    let content_y = 4;
+    let software: [(&str, &str); 2] = [("Kernel", &info.kernel), ("Uptime", &info.uptime)];
 
+    // Overview header text: the machine name (large) over the OS line, aligned
+    // to the value column and stopping short of the OK button at the top-right.
+    // The block sits low — its bottom clears the first rule by `RULE_GAP`, just
+    // like the last detail row clears the second — which lets the logo ride
+    // higher with room above the rule.
+    let ok_w = 72;
+    let ok_h = 24;
+    let header_w = (CONTENT_RIGHT - ok_w - 8) - VALUE_X;
+    let machine_top = 24;
+    let machine_box = Rect::new(VALUE_X, machine_top, header_w, 26);
+    let os_box = Rect::new(VALUE_X, machine_top + 24, header_w, ROW_H);
+
+    // Vertical rhythm: two rules carving Overview | Hardware | Software.
+    let rule1_y = os_box.bottom() + RULE_GAP;
+
+    let hardware_top = rule1_y + 13;
+    let rule2_y = hardware_top + hardware.len() as i32 * ROW_H + RULE_GAP;
+    let software_top = rule2_y + 13;
+    let software_bottom = software_top + software.len() as i32 * ROW_H;
+
+    // OK button: bottom-right of the Overview, its bottom clearing the first
+    // rule by the same RULE_GAP the header text's bottom does.
+    let ok = Rect::new(
+        CONTENT_RIGHT / 2 - ok_w / 2,
+        software_bottom + RULE_GAP * 2,
+        ok_w,
+        ok_h,
+    );
+
+    let mut root = Container::new(CONTENT_WIDTH, ok.bottom() + 12);
+
+    // --- Overview: logo, header text, OK button ---
     root.push(build_os_logo(LOGO_X, LOGO_Y, LOGO_W, LOGO_H));
+    root.push(Label::new(machine_box, info.machine.clone()).with_size(20.0));
+    root.push(Label::new(os_box, info.operating_system.clone()));
 
-    let text_x = LOGO_X + 56;
-    // Stop the info lines short of the OK button so they share the top strip
-    // without overlapping it.
-    let text_w = (CONTENT_WIDTH - 78) - text_x - 6;
-    let mut text_y = LOGO_Y + 6;
-    root.push(Label::new(
-        Rect::new(text_x, text_y, text_w, 16),
-        info.os_name.clone(),
-    ));
-    text_y += 14;
-    root.push(Label::new(
-        Rect::new(text_x, text_y, text_w, 16),
-        format!("Version {}", info.os_version),
-    ));
-    text_y += 14;
-    root.push(Label::new(
-        Rect::new(text_x, text_y, text_w, 16),
-        format!("Kernel {}", info.kernel),
-    ));
+    // --- Dividers + the two detail sections ---
+    push_rows(&mut root, hardware_top, &hardware);
+    push_rows(&mut root, software_top, &software);
 
     root.push(
-        Button::new(Rect::new(CONTENT_WIDTH - 78, content_y + 12, 60, 22), "OK")
+        Button::new(ok, "Close")
             .default(true)
             .on_click(|cx| cx.close()),
     );
 
-    let license_x = content_x + 90;
-    let license_w = CONTENT_WIDTH - license_x - 6;
-    let license_y = content_y + 108;
-    root.push(Label::new(
-        Rect::new(license_x, license_y, license_w, 16),
-        "This product is licensed to:",
-    ));
-    root.push(Label::new(
-        Rect::new(license_x, license_y + 14, license_w, 16),
-        info.licensed_to.clone(),
-    ));
-    root.push(Label::new(
-        Rect::new(license_x, license_y + 28, license_w, 16),
-        info.licensed_org.clone(),
-    ));
-
-    root.push(Bevel::etched_line(
-        content_x + 12,
-        license_y + 60,
-        CONTENT_WIDTH - 40,
-    ));
-
-    let stats_x = content_x + 22;
-    let stats_w = CONTENT_WIDTH - stats_x - 6;
-    let stats_y = license_y + 72;
-    root.push(Label::new(
-        Rect::new(stats_x, stats_y, stats_w, 16),
-        format!("OS: {}", info.operating_system),
-    ));
-    root.push(Label::new(
-        Rect::new(stats_x, stats_y + 16, stats_w, 16),
-        format!("CPU: {}", info.cpu),
-    ));
-    root.push(Label::new(
-        Rect::new(stats_x, stats_y + 32, stats_w, 16),
-        format!("Memory: {}", info.memory_line),
-    ));
-    root.push(Label::new(
-        Rect::new(stats_x, stats_y + 48, stats_w, 16),
-        format!("Disk: {}", info.disk_line),
-    ));
-    root.push(Label::new(
-        Rect::new(stats_x, stats_y + 64, stats_w, 16),
-        format!("Uptime: {}", info.uptime),
-    ));
-
     root
+}
+
+/// Lay key/value rows from `top_y` down: keys left-aligned at `KEY_X`, values
+/// left-aligned at `VALUE_X` so they form a clean column.
+fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)]) {
+    let value_w = CONTENT_RIGHT - VALUE_X;
+    let mut y = top_y;
+    for (key, value) in rows {
+        root.push(Label::new(
+            Rect::new(KEY_X, y, VALUE_X - KEY_X - 6, ROW_H),
+            format!("{key}:"),
+        ));
+        root.push(Label::new(
+            Rect::new(VALUE_X, y, value_w, ROW_H),
+            (*value).to_string(),
+        ));
+        y += ROW_H;
+    }
 }
 
 /// Build the OS-logo image: detect the host OS/distro, rasterize its embedded
@@ -656,11 +683,20 @@ fn gather_system_info() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
 
-    let os_name = System::name().unwrap_or_else(|| "Unknown OS".to_string());
-    let os_version = System::long_os_version()
+    // pfetch's "os" field is the friendly long OS name (e.g. "macOS 26.0"),
+    // which is exactly what `long_os_version` resolves to here.
+    let operating_system = System::long_os_version()
         .or_else(System::os_version)
-        .unwrap_or_else(|| "Unknown Version".to_string());
-    let kernel = System::kernel_version().unwrap_or_else(|| "Unknown Kernel".to_string());
+        .unwrap_or_else(|| "Unknown OS".to_string());
+
+    // Kernel name + version, e.g. "Darwin 25.5.0". `System::name` is the kernel
+    // family ("Darwin", "Linux", …); pair it with the kernel version.
+    let kernel = match (System::name(), System::kernel_version()) {
+        (Some(name), Some(version)) => format!("{name} {version}"),
+        (Some(name), None) => name,
+        (None, Some(version)) => version,
+        (None, None) => "Unknown Kernel".to_string(),
+    };
 
     let cpu = sys
         .cpus()
@@ -676,14 +712,7 @@ fn gather_system_info() -> SystemInfo {
         })
         .unwrap_or_else(|| "Unknown CPU".to_string());
 
-    // Report memory the way pfetch does: used / total. `free_memory` alone is
-    // misleading on macOS (it excludes reclaimable cache, so it reads as nearly
-    // zero); used vs. total is the figure people actually want.
-    let memory_line = format!(
-        "{} / {}",
-        format_bytes(sys.used_memory()),
-        format_bytes(sys.total_memory())
-    );
+    let memory_line = format_bytes(sys.total_memory());
 
     let disks = Disks::new_with_refreshed_list();
     let mut total_disk = 0u64;
@@ -702,28 +731,65 @@ fn gather_system_info() -> SystemInfo {
         "Disk information unavailable".to_string()
     };
 
-    // pfetch's "os" field is the friendly long OS name (e.g. "macOS 26.0"),
-    // which is exactly what `long_os_version` resolves to here.
-    let operating_system = os_version.clone();
     let uptime = seconds_to_string(System::uptime());
 
-    let licensed_to = std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "User".to_string());
-    let licensed_org = System::host_name().unwrap_or_else(|| "Computer".to_string());
+    // Firmware-reported hardware identity. `Product` is unimplemented on some
+    // platforms (e.g. NetBSD), so treat every field as optional.
+    let vendor = Product::vendor_name().map(|v| v.trim().to_string());
+    let model = Product::name()
+        .map(|m| m.trim().to_string())
+        .filter(|m| !m.is_empty());
+    // Overview headline: the friendly model name, or the short hostname when no
+    // model is reported ("peregrine" rather than "peregrine.fritz.box").
+    let machine = match &model {
+        Some(model) => prettify_model(model),
+        None => short_hostname(),
+    };
 
     SystemInfo {
-        os_name,
-        os_version,
-        kernel,
+        machine,
+        operating_system,
+        vendor,
+        model,
         cpu,
         memory_line,
         disk_line,
-        operating_system,
+        kernel,
         uptime,
-        licensed_to,
-        licensed_org,
     }
+}
+
+/// First label of the hostname: `peregrine.fritz.box` → `peregrine`. Used as
+/// the headline fallback where no product/model info is available.
+fn short_hostname() -> String {
+    match System::host_name() {
+        Some(host) => host.split('.').next().unwrap_or(&host).to_string(),
+        None => "Computer".to_string(),
+    }
+}
+
+/// Map a raw machine model identifier to a friendly product name via a small
+/// shipped table of `regex → name` rules; the first matching rule wins. An
+/// identifier that matches nothing is returned unchanged, so machines we have
+/// no rule for still show their reported model rather than blanking out.
+fn prettify_model(model: &str) -> String {
+    // Ordered most-specific first (e.g. `MacBookPro` before `MacBook`).
+    const RULES: &[(&str, &str)] = &[
+        (r"^MacBookPro", "MacBook Pro"),
+        (r"^MacBookAir", "MacBook Air"),
+        (r"^MacBook", "MacBook"),
+        (r"^Macmini", "Mac mini"),
+        (r"^MacStudio", "Mac Studio"),
+        (r"^MacPro", "Mac Pro"),
+        (r"^iMacPro", "iMac Pro"),
+        (r"^iMac", "iMac"),
+    ];
+    for (pattern, name) in RULES {
+        if Regex::new(pattern).is_ok_and(|re| re.is_match(model)) {
+            return (*name).to_string();
+        }
+    }
+    model.to_string()
 }
 
 /// Format an uptime in seconds the way pfetch does: the largest non-zero
@@ -751,4 +817,26 @@ fn seconds_to_string(seconds: u64) -> String {
         result.push_str(&format!("{}m", minutes));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prettify_model_maps_apple_identifiers() {
+        assert_eq!(prettify_model("MacBookPro18,3"), "MacBook Pro");
+        assert_eq!(prettify_model("MacBookAir10,1"), "MacBook Air");
+        assert_eq!(prettify_model("MacBook10,1"), "MacBook");
+        assert_eq!(prettify_model("Macmini9,1"), "Mac mini");
+        assert_eq!(prettify_model("iMac21,1"), "iMac");
+        assert_eq!(prettify_model("iMacPro1,1"), "iMac Pro");
+    }
+
+    #[test]
+    fn prettify_model_passes_through_unknown_identifiers() {
+        // Lenovo machine-type codes and unmapped Apple Silicon ids stay as-is.
+        assert_eq!(prettify_model("20AN"), "20AN");
+        assert_eq!(prettify_model("Mac14,2"), "Mac14,2");
+    }
 }
