@@ -49,9 +49,7 @@ fn main() {
 }
 
 fn build_about_box(info: &SystemInfo) -> Container {
-    let mut root = Container::new(CONTENT_WIDTH, CONTENT_HEIGHT)
-        .with_background(Color::WHITE)
-        .with_border(Color::BLACK);
+    let mut root = Container::new(CONTENT_WIDTH, CONTENT_HEIGHT);
 
     let content_x = 4;
     let content_y = 4;
