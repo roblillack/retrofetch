@@ -96,7 +96,7 @@ fn build_about_box(info: &SystemInfo) -> Container {
     hardware.push(("Memory", &info.memory_line));
     hardware.push(("Disk", &info.disk_line));
 
-    let software: [(&str, &str); 2] = [("Kernel", &info.kernel), ("Uptime", &info.uptime)];
+    let software: [(&str, &str); 2] = [("System", &info.kernel), ("Uptime", &info.uptime)];
 
     // Overview header text: the machine name (large) over the OS line, aligned
     // to the value column and stopping short of the OK button at the top-right.
@@ -689,15 +689,6 @@ fn gather_system_info() -> SystemInfo {
         .or_else(System::os_version)
         .unwrap_or_else(|| "Unknown OS".to_string());
 
-    // Kernel name + version, e.g. "Darwin 25.5.0". `System::name` is the kernel
-    // family ("Darwin", "Linux", …); pair it with the kernel version.
-    let kernel = match (System::name(), System::kernel_version()) {
-        (Some(name), Some(version)) => format!("{name} {version}"),
-        (Some(name), None) => name,
-        (None, Some(version)) => version,
-        (None, None) => "Unknown Kernel".to_string(),
-    };
-
     let cpu = sys
         .cpus()
         .first()
@@ -736,7 +727,7 @@ fn gather_system_info() -> SystemInfo {
     // Firmware-reported hardware identity. `Product` is unimplemented on some
     // platforms (e.g. NetBSD), so treat every field as optional.
     let vendor = Product::vendor_name().map(|v| v.trim().to_string());
-    let model = Product::name()
+    let model = Product::family()
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
     // Overview headline: the friendly model name, or the short hostname when no
@@ -754,7 +745,7 @@ fn gather_system_info() -> SystemInfo {
         cpu,
         memory_line,
         disk_line,
-        kernel,
+        kernel: System::kernel_long_version(),
         uptime,
     }
 }
