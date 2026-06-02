@@ -50,4 +50,8 @@ fn main() {
         "host::cpu_frequency_mhz()     = {:?}",
         host::cpu_frequency_mhz(&sys)
     );
+    println!(
+        "host::total_memory_bytes()    = {:?}",
+        host::total_memory_bytes(&sys)
+    );
 }

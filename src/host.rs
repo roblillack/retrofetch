@@ -40,6 +40,9 @@ mod native {
     pub fn cpu_frequency_mhz(sys: &System) -> Option<u64> {
         sys.cpus().first().map(|c| c.frequency())
     }
+    pub fn total_memory_bytes(sys: &System) -> u64 {
+        sys.total_memory()
+    }
 }
 
 #[cfg(target_os = "openbsd")]
@@ -103,5 +106,11 @@ mod openbsd {
     }
     pub fn cpu_frequency_mhz(_sys: &sysinfo::System) -> Option<u64> {
         sysctl("hw.cpuspeed")?.parse().ok()
+    }
+    // hw.physmem -> total physical memory in bytes (64-bit on modern OpenBSD)
+    pub fn total_memory_bytes(_sys: &sysinfo::System) -> u64 {
+        sysctl("hw.physmem")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
     }
 }

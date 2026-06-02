@@ -716,7 +716,7 @@ fn gather_system_info() -> SystemInfo {
         None => "Unknown CPU".to_string(),
     };
 
-    let memory_line = format_binary_bytes(sys.total_memory());
+    let memory_line = format_binary_bytes(host::total_memory_bytes(&sys));
 
     let disks = Disks::new_with_refreshed_list();
     let mut total_disk = 0u64;
