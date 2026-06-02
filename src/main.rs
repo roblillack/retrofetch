@@ -663,6 +663,15 @@ impl SnakeGame {
 
 // -------------------------------------------------------------------- sysinfo
 
+/// Format `value` with one decimal place, but trim a trailing `.0` so exact
+/// values read as e.g. "16 GiB" rather than "16.0 GiB" while non-round values
+/// keep their precision ("1.5 TB").
+fn format_quantity(value: f64, unit: &str) -> String {
+    let s = format!("{:.1}", value);
+    let trimmed = s.strip_suffix(".0").unwrap_or(&s);
+    format!("{} {}", trimmed, unit)
+}
+
 fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1000.0;
     const MB: f64 = KB * 1000.0;
@@ -671,17 +680,34 @@ fn format_bytes(bytes: u64) -> String {
     const PB: f64 = TB * 1000.0;
     let bytes_f = bytes as f64;
     if bytes_f >= PB {
-        format!("{:.1} PB", bytes_f / PB)
+        format_quantity(bytes_f / PB, "PB")
     } else if bytes_f >= TB {
-        format!("{:.1} TB", bytes_f / TB)
+        format_quantity(bytes_f / TB, "TB")
     } else if bytes_f >= GB {
-        format!("{:.1} GB", bytes_f / GB)
+        format_quantity(bytes_f / GB, "GB")
     } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
+        format_quantity(bytes_f / MB, "MB")
     } else if bytes_f >= KB {
-        format!("{:.1} kB", bytes_f / KB)
+        format_quantity(bytes_f / KB, "kB")
     } else {
         format!("{} B", bytes)
+    }
+}
+
+/// Round a physical-memory byte count up to the nearest plausible installed
+/// size, smoothing out the small BIOS/iGPU reservations that make `hw.physmem`
+/// (and the equivalents on other OSes) report e.g. 15.79 GiB on a 16 GiB
+/// machine. Above 4 GiB, snaps to the next 2 GiB boundary; above 2 GiB, to the
+/// next 1 GiB boundary; smaller values are returned unchanged so tiny systems
+/// aren't misrepresented.
+fn round_installed_memory(bytes: u64) -> u64 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if bytes > 4 * GIB {
+        bytes.div_ceil(2 * GIB) * 2 * GIB
+    } else if bytes > 2 * GIB {
+        bytes.div_ceil(GIB) * GIB
+    } else {
+        bytes
     }
 }
 
@@ -693,15 +719,15 @@ fn format_binary_bytes(bytes: u64) -> String {
     const PB: f64 = TB * 1024.0;
     let bytes_f = bytes as f64;
     if bytes_f >= PB {
-        format!("{:.1} PiB", bytes_f / PB)
+        format_quantity(bytes_f / PB, "PiB")
     } else if bytes_f >= TB {
-        format!("{:.1} TiB", bytes_f / TB)
+        format_quantity(bytes_f / TB, "TiB")
     } else if bytes_f >= GB {
-        format!("{:.1} GiB", bytes_f / GB)
+        format_quantity(bytes_f / GB, "GiB")
     } else if bytes_f >= MB {
-        format!("{:.1} MiB", bytes_f / MB)
+        format_quantity(bytes_f / MB, "MiB")
     } else if bytes_f >= KB {
-        format!("{:.1} KiB", bytes_f / KB)
+        format_quantity(bytes_f / KB, "KiB")
     } else {
         format!("{} B", bytes)
     }
@@ -728,14 +754,14 @@ fn gather_system_info() -> SystemInfo {
         None => "Unknown CPU".to_string(),
     };
 
-    let memory_line = format_binary_bytes(host::total_memory_bytes(&sys));
+    let memory_line = format_binary_bytes(round_installed_memory(host::total_memory_bytes(&sys)));
 
     let (total_disk, avail_disk) = host::disk_totals();
     let disk_line = if total_disk > 0 {
         format!(
-            "{} Free of {}",
-            format_bytes(avail_disk),
-            format_bytes(total_disk)
+            "{} ({} free)",
+            format_bytes(total_disk),
+            format_bytes(avail_disk)
         )
     } else {
         "Disk information unavailable".to_string()
@@ -848,5 +874,21 @@ mod tests {
         // Lenovo machine-type codes and unmapped Apple Silicon ids stay as-is.
         assert_eq!(prettify_model("20AN"), "20AN");
         assert_eq!(prettify_model("Mac14,2"), "Mac14,2");
+    }
+
+    #[test]
+    fn round_installed_memory_snaps_to_plausible_sizes() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // 16 GiB ThinkPad reporting 15.79 GiB after iGPU/BIOS reservations.
+        assert_eq!(round_installed_memory(16_959_840_256), 16 * GIB);
+        // Exact sizes pass through.
+        assert_eq!(round_installed_memory(16 * GIB), 16 * GIB);
+        assert_eq!(round_installed_memory(8 * GIB), 8 * GIB);
+        // 6 GiB (4+2) stays at 6 once snapped to the 2 GiB grid.
+        assert_eq!(round_installed_memory(6 * GIB - 200 * 1024 * 1024), 6 * GIB);
+        // 3 GiB uses the 1 GiB grid (between 2 and 4 GiB).
+        assert_eq!(round_installed_memory(3 * GIB - 100 * 1024 * 1024), 3 * GIB);
+        // Small systems aren't rounded.
+        assert_eq!(round_installed_memory(900_000_000), 900_000_000);
     }
 }
