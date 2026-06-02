@@ -9,7 +9,7 @@ use saudade::{
     App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
-use sysinfo::{Disks, System};
+use sysinfo::System;
 
 const CONTENT_WIDTH: i32 = 320;
 
@@ -667,8 +667,14 @@ fn format_bytes(bytes: u64) -> String {
     const KB: f64 = 1000.0;
     const MB: f64 = KB * 1000.0;
     const GB: f64 = MB * 1000.0;
+    const TB: f64 = GB * 1000.0;
+    const PB: f64 = TB * 1000.0;
     let bytes_f = bytes as f64;
-    if bytes_f >= GB {
+    if bytes_f >= PB {
+        format!("{:.1} PB", bytes_f / PB)
+    } else if bytes_f >= TB {
+        format!("{:.1} TB", bytes_f / TB)
+    } else if bytes_f >= GB {
         format!("{:.1} GB", bytes_f / GB)
     } else if bytes_f >= MB {
         format!("{:.1} MB", bytes_f / MB)
@@ -683,8 +689,14 @@ fn format_binary_bytes(bytes: u64) -> String {
     const KB: f64 = 1024.0;
     const MB: f64 = KB * 1024.0;
     const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+    const PB: f64 = TB * 1024.0;
     let bytes_f = bytes as f64;
-    if bytes_f >= GB {
+    if bytes_f >= PB {
+        format!("{:.1} PiB", bytes_f / PB)
+    } else if bytes_f >= TB {
+        format!("{:.1} TiB", bytes_f / TB)
+    } else if bytes_f >= GB {
         format!("{:.1} GiB", bytes_f / GB)
     } else if bytes_f >= MB {
         format!("{:.1} MiB", bytes_f / MB)
@@ -718,13 +730,7 @@ fn gather_system_info() -> SystemInfo {
 
     let memory_line = format_binary_bytes(host::total_memory_bytes(&sys));
 
-    let disks = Disks::new_with_refreshed_list();
-    let mut total_disk = 0u64;
-    let mut avail_disk = 0u64;
-    for disk in disks.list() {
-        total_disk += disk.total_space();
-        avail_disk += disk.available_space();
-    }
+    let (total_disk, avail_disk) = host::disk_totals();
     let disk_line = if total_disk > 0 {
         format!(
             "{} Free of {}",

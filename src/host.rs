@@ -43,6 +43,19 @@ mod native {
     pub fn total_memory_bytes(sys: &System) -> u64 {
         sys.total_memory()
     }
+    // Summed (total_bytes, available_bytes) across mounted filesystems — what
+    // the about-box's Disk line consumes. The number tracks filesystem space,
+    // which on macOS/Linux is effectively the installed disk capacity too.
+    pub fn disk_totals() -> (u64, u64) {
+        use sysinfo::Disks;
+        let mut total = 0u64;
+        let mut avail = 0u64;
+        for disk in Disks::new_with_refreshed_list().list() {
+            total += disk.total_space();
+            avail += disk.available_space();
+        }
+        (total, avail)
+    }
 }
 
 #[cfg(target_os = "openbsd")]
@@ -112,5 +125,101 @@ mod openbsd {
         sysctl("hw.physmem")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0)
+    }
+    // Filesystem capacity from `df -lkP` (POSIX 1K-block output, local mounts
+    // only). Lines whose first column doesn't start with `/dev/` are skipped to
+    // drop mfs/tmpfs/procfs etc.
+    fn fs_disks() -> Vec<(u64, u64)> {
+        let Some(text) = run("/bin/df", &["-lkP"]) else {
+            return Vec::new();
+        };
+        text.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                if cols.len() < 6 || !cols[0].starts_with("/dev/") {
+                    return None;
+                }
+                let total: u64 = cols[1].parse().ok()?;
+                let avail: u64 = cols[3].parse().ok()?;
+                Some((total * 1024, avail * 1024))
+            })
+            .collect()
+    }
+
+    /// Sum of the *physical* disk capacities the kernel saw at boot, read from
+    /// `/var/run/dmesg.boot`. softraid(4) virtual disks (vendor "OPENBSD",
+    /// product starting with "SR ") are excluded so a SR CRYPTO volume layered
+    /// over an NVMe SSD doesn't double-count. Returns 0 when the file is
+    /// missing or unparseable.
+    fn physical_disk_total_bytes() -> u64 {
+        use std::collections::{HashMap, HashSet};
+
+        let Ok(text) = std::fs::read_to_string("/var/run/dmesg.boot") else {
+            return 0;
+        };
+
+        let mut softraid: HashSet<&str> = HashSet::new();
+        let mut sizes: HashMap<&str, u64> = HashMap::new();
+
+        for line in text.lines() {
+            // "sdN at scsibusM ...: <OPENBSD, SR CRYPTO, ...>" → softraid disk.
+            if let Some(idx) = line.find(" at ") {
+                let dev = line[..idx].trim();
+                if (dev.starts_with("sd") || dev.starts_with("wd"))
+                    && line.contains("<OPENBSD, SR ")
+                {
+                    softraid.insert(dev);
+                }
+            }
+
+            // "sdN: NNNNMB, NN bytes/sector, NNNN sectors" → byte total via
+            // sectors × bytes/sector (more accurate than the rounded MB field).
+            let Some((dev, rest)) = line.split_once(": ") else {
+                continue;
+            };
+            let dev = dev.trim();
+            if !(dev.starts_with("sd") || dev.starts_with("wd") || dev.starts_with("nvme")) {
+                continue;
+            }
+            let parts: Vec<&str> = rest.split(", ").collect();
+            if parts.len() < 3 || !parts[2].ends_with("sectors") {
+                continue;
+            }
+            let Some(bps) = parts[1].split_whitespace().next() else {
+                continue;
+            };
+            let Some(sec) = parts[2].split_whitespace().next() else {
+                continue;
+            };
+            if let (Ok(bps), Ok(sec)) = (bps.parse::<u64>(), sec.parse::<u64>()) {
+                // dmesg.boot can repeat a device across rescans; the last
+                // value is the one the running kernel sees.
+                sizes.insert(dev, bps * sec);
+            }
+        }
+
+        sizes
+            .iter()
+            .filter(|(dev, _)| !softraid.contains(*dev))
+            .map(|(_, &size)| size)
+            .sum()
+    }
+
+    /// (total, available) for the about-box's Disk row. `total` is the sum of
+    /// physical disk capacities — the actually-installed storage, not just
+    /// what's mounted — and falls back to filesystem totals if dmesg.boot can't
+    /// be read. `available` stays filesystem-derived since there's no
+    /// disk-level free-space concept once partitions are carved out.
+    pub fn disk_totals() -> (u64, u64) {
+        let mut fs_total = 0u64;
+        let mut fs_avail = 0u64;
+        for (t, a) in fs_disks() {
+            fs_total += t;
+            fs_avail += a;
+        }
+        let physical = physical_disk_total_bytes();
+        let total = if physical > 0 { physical } else { fs_total };
+        (total, fs_avail)
     }
 }

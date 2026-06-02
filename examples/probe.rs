@@ -54,4 +54,5 @@ fn main() {
         "host::total_memory_bytes()    = {:?}",
         host::total_memory_bytes(&sys)
     );
+    println!("host::disk_totals()           = {:?}", host::disk_totals());
 }
