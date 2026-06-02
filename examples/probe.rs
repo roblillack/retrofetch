@@ -55,4 +55,8 @@ fn main() {
         host::total_memory_bytes(&sys)
     );
     println!("host::disk_totals()           = {:?}", host::disk_totals());
+    println!(
+        "host::uptime_seconds()        = {:?}",
+        host::uptime_seconds()
+    );
 }

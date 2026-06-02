@@ -43,6 +43,9 @@ mod native {
     pub fn total_memory_bytes(sys: &System) -> u64 {
         sys.total_memory()
     }
+    pub fn uptime_seconds() -> u64 {
+        System::uptime()
+    }
     // Summed (total_bytes, available_bytes) across mounted filesystems — what
     // the about-box's Disk line consumes. The number tracks filesystem space,
     // which on macOS/Linux is effectively the installed disk capacity too.
@@ -125,6 +128,16 @@ mod openbsd {
         sysctl("hw.physmem")
             .and_then(|s| s.parse().ok())
             .unwrap_or(0)
+    }
+    // kern.boottime is the Unix timestamp of last boot; subtract from now.
+    pub fn uptime_seconds() -> u64 {
+        let Some(boot) = sysctl("kern.boottime").and_then(|s| s.parse::<u64>().ok()) else {
+            return 0;
+        };
+        let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) else {
+            return 0;
+        };
+        now.as_secs().saturating_sub(boot)
     }
     // Filesystem capacity from `df -lkP` (POSIX 1K-block output, local mounts
     // only). Lines whose first column doesn't start with `/dev/` are skipped to

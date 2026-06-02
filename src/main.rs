@@ -741,7 +741,7 @@ fn gather_system_info() -> SystemInfo {
         "Disk information unavailable".to_string()
     };
 
-    let uptime = seconds_to_string(System::uptime());
+    let uptime = seconds_to_string(host::uptime_seconds());
 
     // Firmware-reported hardware identity. `Product` is unimplemented on some
     // platforms (e.g. NetBSD), so treat every field as optional.
