@@ -3,12 +3,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 use resvg::{tiny_skia, usvg};
+use retrofetch::host;
 use saudade::EventCtx;
 use saudade::{
     App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
-use sysinfo::{Disks, Product, System};
+use sysinfo::{Disks, System};
 
 const CONTENT_WIDTH: i32 = 320;
 
@@ -700,8 +701,8 @@ fn gather_system_info() -> SystemInfo {
 
     // pfetch's "os" field is the friendly long OS name (e.g. "macOS 26.0"),
     // which is exactly what `long_os_version` resolves to here.
-    let operating_system = System::long_os_version()
-        .or_else(System::os_version)
+    let operating_system = host::long_os_version()
+        .or_else(host::os_version)
         .unwrap_or_else(|| "Unknown OS".to_string());
 
     let cpu = sys
@@ -741,8 +742,8 @@ fn gather_system_info() -> SystemInfo {
 
     // Firmware-reported hardware identity. `Product` is unimplemented on some
     // platforms (e.g. NetBSD), so treat every field as optional.
-    let vendor = Product::vendor_name().map(|v| v.trim().to_string());
-    let family = Product::family()
+    let vendor = host::product_vendor_name().map(|v| v.trim().to_string());
+    let family = host::product_family()
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
     // Overview headline: the friendly model name, or the short hostname when no
@@ -756,11 +757,11 @@ fn gather_system_info() -> SystemInfo {
         machine,
         operating_system,
         vendor,
-        model: Product::name(),
+        model: host::product_name(),
         cpu,
         memory_line,
         disk_line,
-        kernel: System::kernel_long_version(),
+        kernel: host::kernel_long_version(),
         uptime,
     }
 }
@@ -768,7 +769,7 @@ fn gather_system_info() -> SystemInfo {
 /// First label of the hostname: `peregrine.fritz.box` → `peregrine`. Used as
 /// the headline fallback where no product/model info is available.
 fn short_hostname() -> String {
-    match System::host_name() {
+    match host::host_name() {
         Some(host) => host.split('.').next().unwrap_or(&host).to_string(),
         None => "Computer".to_string(),
     }
