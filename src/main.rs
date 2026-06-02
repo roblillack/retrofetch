@@ -47,6 +47,9 @@ struct SystemInfo {
     /// Kernel name and version (e.g. "Darwin 25.5.0"). Shown in the Software
     /// group.
     kernel: String,
+    /// Number of installed packages, when the OS exposes a cheap way to count
+    /// them. `None` hides the row.
+    packages: Option<u32>,
     /// Human-readable uptime, formatted like pfetch ("1d 3h 20m").
     uptime: String,
 }
@@ -97,7 +100,14 @@ fn build_about_box(info: &SystemInfo) -> Container {
     hardware.push(("Memory", &info.memory_line));
     hardware.push(("Disk", &info.disk_line));
 
-    let software: [(&str, &str); 2] = [("System", &info.kernel), ("Uptime", &info.uptime)];
+    let mut software: Vec<(&str, &str)> = Vec::new();
+    software.push(("System", &info.kernel));
+    let packages_str;
+    if let Some(n) = info.packages {
+        packages_str = n.to_string();
+        software.push(("Packages", &packages_str));
+    }
+    software.push(("Uptime", &info.uptime));
 
     // Overview header text: the machine name (large) over the OS line, aligned
     // to the value column and stopping short of the OK button at the top-right.
@@ -791,6 +801,7 @@ fn gather_system_info() -> SystemInfo {
         memory_line,
         disk_line,
         kernel: host::kernel_long_version(),
+        packages: host::installed_package_count(),
         uptime,
     }
 }

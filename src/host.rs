@@ -46,6 +46,12 @@ mod native {
     pub fn uptime_seconds() -> u64 {
         System::uptime()
     }
+    pub fn installed_package_count() -> Option<u32> {
+        // sysinfo has no package-manager integration, and the way to count
+        // packages varies per distro/OS. Leaving this unsupported until each
+        // platform has a known cheap path.
+        None
+    }
     // Summed (total_bytes, available_bytes) across mounted filesystems — what
     // the about-box's Disk line consumes. The number tracks filesystem space,
     // which on macOS/Linux is effectively the installed disk capacity too.
@@ -129,6 +135,24 @@ mod openbsd {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0)
     }
+    // Each installed package is a subdirectory of /var/db/pkg/ — exactly what
+    // `pkg_info` walks, but without spawning the tool or reading +CONTENTS.
+    // Dot-prefixed entries (e.g. `.libs-*` shared-library stubs) are not
+    // packages and must be skipped, matching `pkg_info`'s behavior.
+    pub fn installed_package_count() -> Option<u32> {
+        let entries = std::fs::read_dir("/var/db/pkg").ok()?;
+        let mut n: u32 = 0;
+        for entry in entries.flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                n += 1;
+            }
+        }
+        Some(n)
+    }
+
     // kern.boottime is the Unix timestamp of last boot; subtract from now.
     pub fn uptime_seconds() -> u64 {
         let Some(boot) = sysctl("kern.boottime").and_then(|s| s.parse::<u64>().ok()) else {
