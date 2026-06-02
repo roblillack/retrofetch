@@ -148,10 +148,16 @@ mod openbsd {
     }
 
     /// Sum of the *physical* disk capacities the kernel saw at boot, read from
-    /// `/var/run/dmesg.boot`. softraid(4) virtual disks (vendor "OPENBSD",
-    /// product starting with "SR ") are excluded so a SR CRYPTO volume layered
-    /// over an NVMe SSD doesn't double-count. Returns 0 when the file is
-    /// missing or unparseable.
+    /// `/var/run/dmesg.boot`. Two categories are excluded:
+    ///
+    ///  - softraid(4) virtual disks (vendor "OPENBSD", product "SR …") — they
+    ///    layer over a real disk that's already counted.
+    ///  - USB mass-storage drives — detected by walking `sdN → scsibusM →
+    ///    umassK` in the attach lines. Reliable for any device using the
+    ///    standard umass(4) driver, which covers essentially all USB sticks
+    ///    and external HDDs/SSDs on OpenBSD.
+    ///
+    /// Returns 0 when the file is missing or unparseable.
     fn physical_disk_total_bytes() -> u64 {
         use std::collections::{HashMap, HashSet};
 
@@ -159,49 +165,68 @@ mod openbsd {
             return 0;
         };
 
-        let mut softraid: HashSet<&str> = HashSet::new();
-        let mut sizes: HashMap<&str, u64> = HashMap::new();
+        // dmesg.boot can replay attachments across rescans and the kernel may
+        // renumber scsibusN between dumps, so every map below uses "last seen
+        // wins" — the final pass through the file reflects the running state.
+        let mut scsibus_parent: HashMap<String, String> = HashMap::new();
+        let mut disk_scsibus: HashMap<String, String> = HashMap::new();
+        let mut softraid: HashSet<String> = HashSet::new();
+        let mut sizes: HashMap<String, u64> = HashMap::new();
 
         for line in text.lines() {
-            // "sdN at scsibusM ...: <OPENBSD, SR CRYPTO, ...>" → softraid disk.
-            if let Some(idx) = line.find(" at ") {
-                let dev = line[..idx].trim();
-                if (dev.starts_with("sd") || dev.starts_with("wd"))
-                    && line.contains("<OPENBSD, SR ")
+            let dev = line.split([' ', ':']).next().unwrap_or("");
+
+            // "scsibusN at <parent>: ..."  → record the bus's parent device.
+            if dev.starts_with("scsibus")
+                && let Some((_, after_at)) = line.split_once(" at ")
+                && let Some(parent) = after_at.split([':', ' ']).next()
+                && !parent.is_empty()
+            {
+                scsibus_parent.insert(dev.to_string(), parent.to_string());
+            }
+
+            // "sdN at scsibusM ...: <vendor, product, ...>"  → bus link
+            // + softraid detection in the same line.
+            if (dev.starts_with("sd") || dev.starts_with("wd"))
+                && let Some((_, after_at)) = line.split_once(" at ")
+            {
+                if let Some(parent) = after_at.split([':', ' ']).next()
+                    && parent.starts_with("scsibus")
                 {
-                    softraid.insert(dev);
+                    disk_scsibus.insert(dev.to_string(), parent.to_string());
+                }
+                if line.contains("<OPENBSD, SR ") {
+                    softraid.insert(dev.to_string());
                 }
             }
 
             // "sdN: NNNNMB, NN bytes/sector, NNNN sectors" → byte total via
-            // sectors × bytes/sector (more accurate than the rounded MB field).
-            let Some((dev, rest)) = line.split_once(": ") else {
-                continue;
-            };
-            let dev = dev.trim();
-            if !(dev.starts_with("sd") || dev.starts_with("wd") || dev.starts_with("nvme")) {
-                continue;
-            }
-            let parts: Vec<&str> = rest.split(", ").collect();
-            if parts.len() < 3 || !parts[2].ends_with("sectors") {
-                continue;
-            }
-            let Some(bps) = parts[1].split_whitespace().next() else {
-                continue;
-            };
-            let Some(sec) = parts[2].split_whitespace().next() else {
-                continue;
-            };
-            if let (Ok(bps), Ok(sec)) = (bps.parse::<u64>(), sec.parse::<u64>()) {
-                // dmesg.boot can repeat a device across rescans; the last
-                // value is the one the running kernel sees.
-                sizes.insert(dev, bps * sec);
+            // sectors × bytes/sector (more accurate than the rounded MB).
+            if (dev.starts_with("sd") || dev.starts_with("wd") || dev.starts_with("nvme"))
+                && let Some((_, rest)) = line.split_once(": ")
+                && rest.ends_with("sectors")
+            {
+                let parts: Vec<&str> = rest.split(", ").collect();
+                if parts.len() >= 3
+                    && let Some(bps) = parts[1].split_whitespace().next()
+                    && let Some(sec) = parts[2].split_whitespace().next()
+                    && let (Ok(bps), Ok(sec)) = (bps.parse::<u64>(), sec.parse::<u64>())
+                {
+                    sizes.insert(dev.to_string(), bps * sec);
+                }
             }
         }
 
+        let is_usb = |dev: &str| -> bool {
+            disk_scsibus
+                .get(dev)
+                .and_then(|bus| scsibus_parent.get(bus))
+                .is_some_and(|parent| parent.starts_with("umass"))
+        };
+
         sizes
             .iter()
-            .filter(|(dev, _)| !softraid.contains(*dev))
+            .filter(|(dev, _)| !softraid.contains(*dev) && !is_usb(dev))
             .map(|(_, &size)| size)
             .sum()
     }
