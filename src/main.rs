@@ -705,19 +705,16 @@ fn gather_system_info() -> SystemInfo {
         .or_else(host::os_version)
         .unwrap_or_else(|| "Unknown OS".to_string());
 
-    let cpu = sys
-        .cpus()
-        .first()
-        .map(|cpu| {
-            let brand = cpu.brand().trim();
-            let freq = cpu.frequency();
-            if freq > 0 {
-                format!("{} @ {} MHz", brand, freq)
-            } else {
-                brand.to_string()
+    let cpu = match host::cpu_brand(&sys) {
+        Some(brand) => {
+            let trimmed = brand.trim();
+            match host::cpu_frequency_mhz(&sys) {
+                Some(freq) if freq > 0 => format!("{} @ {} MHz", trimmed, freq),
+                _ => trimmed.to_string(),
             }
-        })
-        .unwrap_or_else(|| "Unknown CPU".to_string());
+        }
+        None => "Unknown CPU".to_string(),
+    };
 
     let memory_line = format_binary_bytes(sys.total_memory());
 

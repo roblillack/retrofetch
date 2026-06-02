@@ -2,6 +2,8 @@ use retrofetch::host;
 use sysinfo::{Product, System};
 
 fn main() {
+    let mut sys = System::new_all();
+    sys.refresh_all();
     // Hardware identity. Vendor / name / family route through `host` so the
     // workaround for platforms `sysinfo` doesn't support (OpenBSD) kicks in.
     println!(
@@ -38,5 +40,14 @@ fn main() {
     println!(
         "host::kernel_long_version()   = {:?}",
         host::kernel_long_version()
+    );
+    println!("---");
+    println!(
+        "host::cpu_brand()             = {:?}",
+        host::cpu_brand(&sys)
+    );
+    println!(
+        "host::cpu_frequency_mhz()     = {:?}",
+        host::cpu_frequency_mhz(&sys)
     );
 }

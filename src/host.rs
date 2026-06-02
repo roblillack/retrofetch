@@ -34,6 +34,12 @@ mod native {
     pub fn product_family() -> Option<String> {
         Product::family()
     }
+    pub fn cpu_brand(sys: &System) -> Option<String> {
+        sys.cpus().first().map(|c| c.brand().to_string())
+    }
+    pub fn cpu_frequency_mhz(sys: &System) -> Option<u64> {
+        sys.cpus().first().map(|c| c.frequency())
+    }
 }
 
 #[cfg(target_os = "openbsd")]
@@ -88,5 +94,14 @@ mod openbsd {
     }
     pub fn product_family() -> Option<String> {
         sysctl("hw.version")
+    }
+    // sysinfo's CPU enumeration is empty on OpenBSD, so fall back to sysctl:
+    //   hw.model    -> "Intel(R) Core(TM) i7-8565U CPU @ 1.80GHz"
+    //   hw.cpuspeed -> current core frequency in MHz
+    pub fn cpu_brand(_sys: &sysinfo::System) -> Option<String> {
+        sysctl("hw.model")
+    }
+    pub fn cpu_frequency_mhz(_sys: &sysinfo::System) -> Option<u64> {
+        sysctl("hw.cpuspeed")?.parse().ok()
     }
 }
