@@ -60,7 +60,9 @@ struct SystemInfo {
 
 fn main() {
     let info = gather_system_info();
-    let content_width = compute_content_width(host::product_family().as_deref());
+    let theme = Theme::windows_31();
+    let content_width =
+        compute_content_width(&info, host::product_family().as_deref(), theme.font_size);
 
     let about = build_about_box(&info, content_width);
     // The box sizes its own height from the stacked group boxes; match the
@@ -72,25 +74,57 @@ fn main() {
         WindowConfig::new("About This Computer", content_width, height),
         root,
     )
-    .with_theme(Theme::windows_31())
+    .with_theme(theme)
     .run();
 }
 
-/// Pick a window width that fits the firmware-reported product family in the
-/// headline font, falling back to [`MIN_CONTENT_WIDTH`] when the family is
-/// missing, fits already, or the system font can't be loaded for measurement.
-fn compute_content_width(family: Option<&str>) -> i32 {
-    let Some(family) = family.map(str::trim).filter(|s| !s.is_empty()) else {
-        return MIN_CONTENT_WIDTH;
-    };
+/// Pick a window width that fits every value-column string at its rendering
+/// size: the firmware-reported product family at the large headline size, and
+/// every detail row's value at the body font size. Falls back to
+/// [`MIN_CONTENT_WIDTH`] when the system font can't be loaded for measurement.
+fn compute_content_width(info: &SystemInfo, family: Option<&str>, body_size: f32) -> i32 {
     let Some(font) = Font::load_system() else {
         return MIN_CONTENT_WIDTH;
     };
-    let (text_w, _) = font.measure(family, MACHINE_FONT_SIZE);
-    // Mirror the left RULE_X margin on the right so the headline doesn't
-    // butt up against the window edge.
-    let required = VALUE_X + text_w.ceil() as i32 + RULE_X;
-    required.max(MIN_CONTENT_WIDTH)
+
+    // Window width needed so `text` rendered at `size` fits in the value
+    // column with a RULE_X right margin matching the left.
+    let needed_for = |text: &str, size: f32| -> i32 {
+        let (w, _) = font.measure(text, size);
+        VALUE_X + w.ceil() as i32 + RULE_X
+    };
+
+    let mut required = MIN_CONTENT_WIDTH;
+
+    if let Some(family) = family.map(str::trim).filter(|s| !s.is_empty()) {
+        required = required.max(needed_for(family, MACHINE_FONT_SIZE));
+    }
+
+    // Every other value rendered in the value column at the body font size.
+    let mut values: Vec<&str> = vec![
+        info.operating_system.as_str(),
+        info.cpu.as_str(),
+        info.memory_line.as_str(),
+        info.disk_line.as_str(),
+        info.kernel.as_str(),
+        info.uptime.as_str(),
+    ];
+    if let Some(v) = &info.vendor {
+        values.push(v);
+    }
+    if let Some(m) = &info.model {
+        values.push(m);
+    }
+    let pkg_str;
+    if let Some(n) = info.packages {
+        pkg_str = n.to_string();
+        values.push(&pkg_str);
+    }
+    for v in values {
+        required = required.max(needed_for(v, body_size));
+    }
+
+    required
 }
 
 /// Horizontal layout columns (logical px). The logo, key labels and the rules
