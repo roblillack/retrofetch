@@ -6,12 +6,16 @@ use resvg::{tiny_skia, usvg};
 use retrofetch::host;
 use saudade::EventCtx;
 use saudade::{
-    App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
+    App, Button, Color, Container, Event, Font, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
 use sysinfo::System;
 
-const CONTENT_WIDTH: i32 = 320;
+/// Default window width. Grown at runtime when the headline machine name
+/// would otherwise overflow the value column.
+const MIN_CONTENT_WIDTH: i32 = 320;
+/// Pixel size used for the headline machine name in the Overview.
+const MACHINE_FONT_SIZE: f32 = 20.0;
 
 /// Position and size of the OS logo in the Overview section, in the root
 /// widget's logical coordinate system. The overall window height is derived
@@ -56,28 +60,46 @@ struct SystemInfo {
 
 fn main() {
     let info = gather_system_info();
+    let content_width = compute_content_width(host::product_family().as_deref());
 
-    let about = build_about_box(&info);
+    let about = build_about_box(&info, content_width);
     // The box sizes its own height from the stacked group boxes; match the
     // window to it so there's no dead strip at the bottom.
     let height = about.bounds().h;
     let root = AboutWithEasterEgg::new(about);
 
     App::new(
-        WindowConfig::new("About This Computer", CONTENT_WIDTH, height),
+        WindowConfig::new("About This Computer", content_width, height),
         root,
     )
     .with_theme(Theme::windows_31())
     .run();
 }
 
+/// Pick a window width that fits the firmware-reported product family in the
+/// headline font, falling back to [`MIN_CONTENT_WIDTH`] when the family is
+/// missing, fits already, or the system font can't be loaded for measurement.
+fn compute_content_width(family: Option<&str>) -> i32 {
+    let Some(family) = family.map(str::trim).filter(|s| !s.is_empty()) else {
+        return MIN_CONTENT_WIDTH;
+    };
+    let Some(font) = Font::load_system() else {
+        return MIN_CONTENT_WIDTH;
+    };
+    let (text_w, _) = font.measure(family, MACHINE_FONT_SIZE);
+    // Mirror the left RULE_X margin on the right so the headline doesn't
+    // butt up against the window edge.
+    let required = VALUE_X + text_w.ceil() as i32 + RULE_X;
+    required.max(MIN_CONTENT_WIDTH)
+}
+
 /// Horizontal layout columns (logical px). The logo, key labels and the rules
 /// all left-align to `KEY_X`; the detail values and the Overview header text
 /// all left-align to `VALUE_X`, so the big machine name sits over the value
-/// column of the sections below it.
+/// column of the sections below it. The right edge of the rule (and so the
+/// value column) is `content_width - RULE_X`, derived at runtime since the
+/// window may grow to fit a long headline.
 const RULE_X: i32 = 16;
-const RULE_W: i32 = CONTENT_WIDTH - 2 * RULE_X;
-const CONTENT_RIGHT: i32 = RULE_X + RULE_W;
 const KEY_X: i32 = RULE_X;
 const VALUE_X: i32 = 90;
 /// Height of one key/value detail row.
@@ -87,7 +109,10 @@ const ROW_H: i32 = 18;
 /// Disk row clears the second.
 const RULE_GAP: i32 = 8;
 
-fn build_about_box(info: &SystemInfo) -> Container {
+fn build_about_box(info: &SystemInfo, content_width: i32) -> Container {
+    let rule_w = content_width - 2 * RULE_X;
+    let content_right = RULE_X + rule_w;
+
     // Hardware rows: vendor and model only when the OS reports them.
     let mut hardware: Vec<(&str, &str)> = Vec::new();
     if let Some(vendor) = &info.vendor {
@@ -117,8 +142,8 @@ fn build_about_box(info: &SystemInfo) -> Container {
     let ok_w = 72;
     let ok_h = 24;
     let machine_top = 24;
-    let machine_box = Rect::new(VALUE_X, machine_top, RULE_W, 26);
-    let os_box = Rect::new(VALUE_X, machine_top + 24, RULE_W, ROW_H);
+    let machine_box = Rect::new(VALUE_X, machine_top, rule_w, 26);
+    let os_box = Rect::new(VALUE_X, machine_top + 24, rule_w, ROW_H);
 
     // Vertical rhythm: two rules carving Overview | Hardware | Software.
     let rule1_y = os_box.bottom() + RULE_GAP;
@@ -131,22 +156,22 @@ fn build_about_box(info: &SystemInfo) -> Container {
     // OK button: bottom-right of the Overview, its bottom clearing the first
     // rule by the same RULE_GAP the header text's bottom does.
     let ok = Rect::new(
-        CONTENT_RIGHT / 2 - ok_w / 2,
+        content_right / 2 - ok_w / 2,
         software_bottom + RULE_GAP * 2,
         ok_w,
         ok_h,
     );
 
-    let mut root = Container::new(CONTENT_WIDTH, ok.bottom() + 12);
+    let mut root = Container::new(content_width, ok.bottom() + 12);
 
     // --- Overview: logo, header text, OK button ---
     root.push(build_os_logo(LOGO_X, LOGO_Y, LOGO_W, LOGO_H));
-    root.push(Label::new(machine_box, info.machine.clone()).with_size(20.0));
+    root.push(Label::new(machine_box, info.machine.clone()).with_size(MACHINE_FONT_SIZE));
     root.push(Label::new(os_box, info.operating_system.clone()));
 
     // --- Dividers + the two detail sections ---
-    push_rows(&mut root, hardware_top, &hardware);
-    push_rows(&mut root, software_top, &software);
+    push_rows(&mut root, hardware_top, &hardware, content_right);
+    push_rows(&mut root, software_top, &software, content_right);
 
     root.push(
         Button::new(ok, "Close")
@@ -159,8 +184,8 @@ fn build_about_box(info: &SystemInfo) -> Container {
 
 /// Lay key/value rows from `top_y` down: keys left-aligned at `KEY_X`, values
 /// left-aligned at `VALUE_X` so they form a clean column.
-fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)]) {
-    let value_w = CONTENT_RIGHT - VALUE_X;
+fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)], content_right: i32) {
+    let value_w = content_right - VALUE_X;
     let mut y = top_y;
     for (key, value) in rows {
         root.push(Label::new(
