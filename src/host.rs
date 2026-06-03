@@ -34,8 +34,37 @@ mod native {
     pub fn product_family() -> Option<String> {
         Product::family()
     }
+
+    #[cfg(windows)]
+    fn cpu_brand_from_registry() -> Option<String> {
+        use winreg::RegKey;
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let cpu_key = hklm
+            .open_subkey(r"HARDWARE\DESCRIPTION\System\CentralProcessor\0")
+            .ok()?;
+        let name: String = cpu_key.get_value("ProcessorNameString").ok()?;
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
     pub fn cpu_brand(sys: &System) -> Option<String> {
-        sys.cpus().first().map(|c| c.brand().to_string())
+        // On Windows, try registry first as sysinfo may return empty brand
+        #[cfg(windows)]
+        if let Some(brand) = cpu_brand_from_registry() {
+            return Some(brand);
+        }
+
+        // Fall back to sysinfo for other platforms or if registry fails
+        sys.cpus()
+            .first()
+            .map(|c| c.brand().to_string())
+            .filter(|s| !s.trim().is_empty())
     }
     pub fn cpu_frequency_mhz(sys: &System) -> Option<u64> {
         sys.cpus().first().map(|c| c.frequency())
