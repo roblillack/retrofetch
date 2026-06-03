@@ -8,7 +8,9 @@ use saudade::{
     App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
-use sysinfo::{Disks, Product, System};
+use sysinfo::{Product, System};
+
+use retrofetch::disk;
 
 const CONTENT_WIDTH: i32 = 320;
 
@@ -678,6 +680,28 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Like [`format_bytes`] but in decimal units (1 GB = 1000 MB), matching how
+/// macOS and drive vendors report storage capacity. Used for disk size; memory
+/// stays on the binary [`format_bytes`].
+fn format_disk_bytes(bytes: u64) -> String {
+    const KB: f64 = 1000.0;
+    const MB: f64 = KB * 1000.0;
+    const GB: f64 = MB * 1000.0;
+    const TB: f64 = GB * 1000.0;
+    let bytes_f = bytes as f64;
+    if bytes_f >= TB {
+        format!("{:.1} TB", bytes_f / TB)
+    } else if bytes_f >= GB {
+        format!("{:.1} GB", bytes_f / GB)
+    } else if bytes_f >= MB {
+        format!("{:.1} MB", bytes_f / MB)
+    } else if bytes_f >= KB {
+        format!("{:.1} KB", bytes_f / KB)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
 fn gather_system_info() -> SystemInfo {
     let mut sys = System::new_all();
     sys.refresh_all();
@@ -704,21 +728,13 @@ fn gather_system_info() -> SystemInfo {
 
     let memory_line = format_bytes(sys.total_memory());
 
-    let disks = Disks::new_with_refreshed_list();
-    let mut total_disk = 0u64;
-    let mut avail_disk = 0u64;
-    for disk in disks.list() {
-        total_disk += disk.total_space();
-        avail_disk += disk.available_space();
-    }
-    let disk_line = if total_disk > 0 {
-        format!(
+    let disk_line = match disk::disk_space() {
+        Some(space) => format!(
             "{} Free of {}",
-            format_bytes(avail_disk),
-            format_bytes(total_disk)
-        )
-    } else {
-        "Disk information unavailable".to_string()
+            format_disk_bytes(space.available),
+            format_disk_bytes(space.total)
+        ),
+        None => "Disk information unavailable".to_string(),
     };
 
     let uptime = seconds_to_string(System::uptime());
