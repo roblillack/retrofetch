@@ -81,18 +81,141 @@ mod native {
         // platform has a known cheap path.
         None
     }
-    // Summed (total_bytes, available_bytes) across mounted filesystems — what
-    // the about-box's Disk line consumes. The number tracks filesystem space,
-    // which on macOS/Linux is effectively the installed disk capacity too.
+    /// Sum of the *physical* disk capacities, read from each `\\.\PhysicalDriveN`
+    /// via `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`. Removable and USB-attached drives
+    /// are skipped (via `IOCTL_STORAGE_QUERY_PROPERTY`) so a plugged-in stick
+    /// doesn't inflate the installed-storage figure — mirroring the OpenBSD
+    /// dmesg path. Both IOCTLs work on a handle opened with zero access, so this
+    /// needs no administrator rights. Returns 0 if nothing could be read.
+    #[cfg(windows)]
+    fn physical_disk_total_bytes() -> u64 {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            CreateFileW, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        };
+        use windows_sys::Win32::System::IO::DeviceIoControl;
+
+        const IOCTL_DISK_GET_DRIVE_GEOMETRY_EX: u32 = 0x0007_00A0;
+        const IOCTL_STORAGE_QUERY_PROPERTY: u32 = 0x002D_1400;
+        // STORAGE_BUS_TYPE::BusTypeUsb
+        const BUS_TYPE_USB: u32 = 0x07;
+        // Physical drive numbers can have gaps (e.g. after a hot-unplug), so we
+        // scan a fixed range rather than stopping at the first one that's absent.
+        const MAX_DRIVES: u32 = 32;
+
+        let mut total: u64 = 0;
+
+        for n in 0..MAX_DRIVES {
+            let path = format!(r"\\.\PhysicalDrive{n}");
+            let wide: Vec<u16> = OsStr::new(&path)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+
+            // Zero desired access is enough for these metadata IOCTLs and, unlike
+            // a read handle, doesn't require elevation. Sharing read+write is
+            // mandatory since the OS already holds the disk open.
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    0,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    std::ptr::null(),
+                    OPEN_EXISTING,
+                    0,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                continue;
+            }
+
+            let mut returned: u32 = 0;
+
+            // STORAGE_DEVICE_DESCRIPTOR: RemovableMedia is a byte at offset 10,
+            // BusType a DWORD at offset 28. The 12-byte zeroed input is a
+            // STORAGE_PROPERTY_QUERY asking for StorageDeviceProperty.
+            let query = [0u8; 12];
+            let mut desc = [0u8; 512];
+            let got_desc = unsafe {
+                DeviceIoControl(
+                    handle,
+                    IOCTL_STORAGE_QUERY_PROPERTY,
+                    query.as_ptr() as *const _,
+                    query.len() as u32,
+                    desc.as_mut_ptr() as *mut _,
+                    desc.len() as u32,
+                    &mut returned,
+                    std::ptr::null_mut(),
+                )
+            };
+            let skip = got_desc != 0 && returned >= 32 && {
+                let removable = desc[10] != 0;
+                let bus_type = u32::from_le_bytes([desc[28], desc[29], desc[30], desc[31]]);
+                removable || bus_type == BUS_TYPE_USB
+            };
+
+            if !skip {
+                // DISK_GEOMETRY_EX: the true DiskSize is an i64 at offset 24,
+                // past the 24-byte DISK_GEOMETRY header.
+                let mut geo = [0u8; 64];
+                let got_geo = unsafe {
+                    DeviceIoControl(
+                        handle,
+                        IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                        std::ptr::null(),
+                        0,
+                        geo.as_mut_ptr() as *mut _,
+                        geo.len() as u32,
+                        &mut returned,
+                        std::ptr::null_mut(),
+                    )
+                };
+                if got_geo != 0 && returned >= 32 {
+                    let size = i64::from_le_bytes([
+                        geo[24], geo[25], geo[26], geo[27], geo[28], geo[29], geo[30], geo[31],
+                    ]);
+                    if size > 0 {
+                        total += size as u64;
+                    }
+                }
+            }
+
+            unsafe { CloseHandle(handle) };
+        }
+
+        total
+    }
+
+    /// (total, available) for the about-box's Disk row.
+    ///
+    /// `available` is always the sum of free space across mounted filesystems.
+    /// `total` is the installed-storage figure: on Windows the summed physical
+    /// disk capacity (matching the OpenBSD/macOS behaviour of reporting the
+    /// actual hardware size rather than just mounted volumes), falling back to
+    /// filesystem totals if no physical disk could be read. On macOS/Linux the
+    /// filesystem total already tracks the installed capacity closely enough, so
+    /// it's used directly.
     pub fn disk_totals() -> (u64, u64) {
         use sysinfo::Disks;
-        let mut total = 0u64;
-        let mut avail = 0u64;
+        let mut fs_total = 0u64;
+        let mut fs_avail = 0u64;
         for disk in Disks::new_with_refreshed_list().list() {
-            total += disk.total_space();
-            avail += disk.available_space();
+            fs_total += disk.total_space();
+            fs_avail += disk.available_space();
         }
-        (total, avail)
+
+        #[cfg(windows)]
+        let total = {
+            let physical = physical_disk_total_bytes();
+            if physical > 0 { physical } else { fs_total }
+        };
+        #[cfg(not(windows))]
+        let total = fs_total;
+
+        (total, fs_avail)
     }
 }
 
