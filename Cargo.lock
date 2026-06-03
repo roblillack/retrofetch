@@ -1548,6 +1548,8 @@ dependencies = [
 [[package]]
 name = "saudade"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d1e88b40434f24535ee65b24451c74432ed08dd7af0ee8d4b703fd279467d4f"
 dependencies = [
  "arboard",
  "fontdb 0.16.2",

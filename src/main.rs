@@ -3,16 +3,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
 use resvg::{tiny_skia, usvg};
+use retrofetch::host;
 use saudade::EventCtx;
 use saudade::{
-    App, Button, Color, Container, Event, Image, Key, Label, MouseButton, NamedKey, Painter,
+    App, Button, Color, Container, Event, Font, Image, Key, Label, MouseButton, NamedKey, Painter,
     PopupRequest, Rect, Theme, Widget, WindowConfig,
 };
-use sysinfo::{Product, System};
+use sysinfo::System;
 
-use retrofetch::disk;
-
-const CONTENT_WIDTH: i32 = 320;
+/// Default window width. Grown at runtime when the headline machine name
+/// would otherwise overflow the value column.
+const MIN_CONTENT_WIDTH: i32 = 320;
+/// Pixel size used for the headline machine name in the Overview.
+const MACHINE_FONT_SIZE: f32 = 20.0;
 
 /// Position and size of the OS logo in the Overview section, in the root
 /// widget's logical coordinate system. The overall window height is derived
@@ -48,34 +51,89 @@ struct SystemInfo {
     /// Kernel name and version (e.g. "Darwin 25.5.0"). Shown in the Software
     /// group.
     kernel: String,
+    /// Number of installed packages, when the OS exposes a cheap way to count
+    /// them. `None` hides the row.
+    packages: Option<u32>,
     /// Human-readable uptime, formatted like pfetch ("1d 3h 20m").
     uptime: String,
 }
 
 fn main() {
     let info = gather_system_info();
+    let theme = Theme::windows_31();
+    let content_width =
+        compute_content_width(&info, host::product_family().as_deref(), theme.font_size);
 
-    let about = build_about_box(&info);
+    let about = build_about_box(&info, content_width);
     // The box sizes its own height from the stacked group boxes; match the
     // window to it so there's no dead strip at the bottom.
     let height = about.bounds().h;
     let root = AboutWithEasterEgg::new(about);
 
     App::new(
-        WindowConfig::new("About This Computer", CONTENT_WIDTH, height),
+        WindowConfig::new("About This Computer", content_width, height),
         root,
     )
-    .with_theme(Theme::windows_31())
+    .with_theme(theme)
     .run();
+}
+
+/// Pick a window width that fits every value-column string at its rendering
+/// size: the firmware-reported product family at the large headline size, and
+/// every detail row's value at the body font size. Falls back to
+/// [`MIN_CONTENT_WIDTH`] when the system font can't be loaded for measurement.
+fn compute_content_width(info: &SystemInfo, family: Option<&str>, body_size: f32) -> i32 {
+    let Some(font) = Font::load_system() else {
+        return MIN_CONTENT_WIDTH;
+    };
+
+    // Window width needed so `text` rendered at `size` fits in the value
+    // column with a RULE_X right margin matching the left.
+    let needed_for = |text: &str, size: f32| -> i32 {
+        let (w, _) = font.measure(text, size);
+        VALUE_X + w.ceil() as i32 + RULE_X
+    };
+
+    let mut required = MIN_CONTENT_WIDTH;
+
+    if let Some(family) = family.map(str::trim).filter(|s| !s.is_empty()) {
+        required = required.max(needed_for(family, MACHINE_FONT_SIZE));
+    }
+
+    // Every other value rendered in the value column at the body font size.
+    let mut values: Vec<&str> = vec![
+        info.operating_system.as_str(),
+        info.cpu.as_str(),
+        info.memory_line.as_str(),
+        info.disk_line.as_str(),
+        info.kernel.as_str(),
+        info.uptime.as_str(),
+    ];
+    if let Some(v) = &info.vendor {
+        values.push(v);
+    }
+    if let Some(m) = &info.model {
+        values.push(m);
+    }
+    let pkg_str;
+    if let Some(n) = info.packages {
+        pkg_str = n.to_string();
+        values.push(&pkg_str);
+    }
+    for v in values {
+        required = required.max(needed_for(v, body_size));
+    }
+
+    required
 }
 
 /// Horizontal layout columns (logical px). The logo, key labels and the rules
 /// all left-align to `KEY_X`; the detail values and the Overview header text
 /// all left-align to `VALUE_X`, so the big machine name sits over the value
-/// column of the sections below it.
+/// column of the sections below it. The right edge of the rule (and so the
+/// value column) is `content_width - RULE_X`, derived at runtime since the
+/// window may grow to fit a long headline.
 const RULE_X: i32 = 16;
-const RULE_W: i32 = CONTENT_WIDTH - 2 * RULE_X;
-const CONTENT_RIGHT: i32 = RULE_X + RULE_W;
 const KEY_X: i32 = RULE_X;
 const VALUE_X: i32 = 90;
 /// Height of one key/value detail row.
@@ -85,7 +143,10 @@ const ROW_H: i32 = 18;
 /// Disk row clears the second.
 const RULE_GAP: i32 = 8;
 
-fn build_about_box(info: &SystemInfo) -> Container {
+fn build_about_box(info: &SystemInfo, content_width: i32) -> Container {
+    let rule_w = content_width - 2 * RULE_X;
+    let content_right = RULE_X + rule_w;
+
     // Hardware rows: vendor and model only when the OS reports them.
     let mut hardware: Vec<(&str, &str)> = Vec::new();
     if let Some(vendor) = &info.vendor {
@@ -98,7 +159,14 @@ fn build_about_box(info: &SystemInfo) -> Container {
     hardware.push(("Memory", &info.memory_line));
     hardware.push(("Disk", &info.disk_line));
 
-    let software: [(&str, &str); 2] = [("System", &info.kernel), ("Uptime", &info.uptime)];
+    let mut software: Vec<(&str, &str)> = Vec::new();
+    software.push(("System", &info.kernel));
+    let packages_str;
+    if let Some(n) = info.packages {
+        packages_str = n.to_string();
+        software.push(("Packages", &packages_str));
+    }
+    software.push(("Uptime", &info.uptime));
 
     // Overview header text: the machine name (large) over the OS line, aligned
     // to the value column and stopping short of the OK button at the top-right.
@@ -108,8 +176,8 @@ fn build_about_box(info: &SystemInfo) -> Container {
     let ok_w = 72;
     let ok_h = 24;
     let machine_top = 24;
-    let machine_box = Rect::new(VALUE_X, machine_top, RULE_W, 26);
-    let os_box = Rect::new(VALUE_X, machine_top + 24, RULE_W, ROW_H);
+    let machine_box = Rect::new(VALUE_X, machine_top, rule_w, 26);
+    let os_box = Rect::new(VALUE_X, machine_top + 24, rule_w, ROW_H);
 
     // Vertical rhythm: two rules carving Overview | Hardware | Software.
     let rule1_y = os_box.bottom() + RULE_GAP;
@@ -122,22 +190,22 @@ fn build_about_box(info: &SystemInfo) -> Container {
     // OK button: bottom-right of the Overview, its bottom clearing the first
     // rule by the same RULE_GAP the header text's bottom does.
     let ok = Rect::new(
-        CONTENT_RIGHT / 2 - ok_w / 2,
+        content_right / 2 - ok_w / 2,
         software_bottom + RULE_GAP * 2,
         ok_w,
         ok_h,
     );
 
-    let mut root = Container::new(CONTENT_WIDTH, ok.bottom() + 12);
+    let mut root = Container::new(content_width, ok.bottom() + 12);
 
     // --- Overview: logo, header text, OK button ---
     root.push(build_os_logo(LOGO_X, LOGO_Y, LOGO_W, LOGO_H));
-    root.push(Label::new(machine_box, info.machine.clone()).with_size(20.0));
+    root.push(Label::new(machine_box, info.machine.clone()).with_size(MACHINE_FONT_SIZE));
     root.push(Label::new(os_box, info.operating_system.clone()));
 
     // --- Dividers + the two detail sections ---
-    push_rows(&mut root, hardware_top, &hardware);
-    push_rows(&mut root, software_top, &software);
+    push_rows(&mut root, hardware_top, &hardware, content_right);
+    push_rows(&mut root, software_top, &software, content_right);
 
     root.push(
         Button::new(ok, "Close")
@@ -150,8 +218,8 @@ fn build_about_box(info: &SystemInfo) -> Container {
 
 /// Lay key/value rows from `top_y` down: keys left-aligned at `KEY_X`, values
 /// left-aligned at `VALUE_X` so they form a clean column.
-fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)]) {
-    let value_w = CONTENT_RIGHT - VALUE_X;
+fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)], content_right: i32) {
+    let value_w = content_right - VALUE_X;
     let mut y = top_y;
     for (key, value) in rows {
         root.push(Label::new(
@@ -664,39 +732,71 @@ impl SnakeGame {
 
 // -------------------------------------------------------------------- sysinfo
 
+/// Format `value` with one decimal place, but trim a trailing `.0` so exact
+/// values read as e.g. "16 GiB" rather than "16.0 GiB" while non-round values
+/// keep their precision ("1.5 TB").
+fn format_quantity(value: f64, unit: &str) -> String {
+    let s = format!("{:.1}", value);
+    let trimmed = s.strip_suffix(".0").unwrap_or(&s);
+    format!("{} {}", trimmed, unit)
+}
+
 fn format_bytes(bytes: u64) -> String {
-    const KB: f64 = 1024.0;
-    const MB: f64 = KB * 1024.0;
-    const GB: f64 = MB * 1024.0;
+    const KB: f64 = 1000.0;
+    const MB: f64 = KB * 1000.0;
+    const GB: f64 = MB * 1000.0;
+    const TB: f64 = GB * 1000.0;
+    const PB: f64 = TB * 1000.0;
     let bytes_f = bytes as f64;
-    if bytes_f >= GB {
-        format!("{:.1} GB", bytes_f / GB)
+    if bytes_f >= PB {
+        format_quantity(bytes_f / PB, "PB")
+    } else if bytes_f >= TB {
+        format_quantity(bytes_f / TB, "TB")
+    } else if bytes_f >= GB {
+        format_quantity(bytes_f / GB, "GB")
     } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
+        format_quantity(bytes_f / MB, "MB")
     } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
+        format_quantity(bytes_f / KB, "kB")
     } else {
         format!("{} B", bytes)
     }
 }
 
-/// Like [`format_bytes`] but in decimal units (1 GB = 1000 MB), matching how
-/// macOS and drive vendors report storage capacity. Used for disk size; memory
-/// stays on the binary [`format_bytes`].
-fn format_disk_bytes(bytes: u64) -> String {
-    const KB: f64 = 1000.0;
-    const MB: f64 = KB * 1000.0;
-    const GB: f64 = MB * 1000.0;
-    const TB: f64 = GB * 1000.0;
+/// Round a physical-memory byte count up to the nearest plausible installed
+/// size, smoothing out the small BIOS/iGPU reservations that make `hw.physmem`
+/// (and the equivalents on other OSes) report e.g. 15.79 GiB on a 16 GiB
+/// machine. Above 4 GiB, snaps to the next 2 GiB boundary; above 2 GiB, to the
+/// next 1 GiB boundary; smaller values are returned unchanged so tiny systems
+/// aren't misrepresented.
+fn round_installed_memory(bytes: u64) -> u64 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    if bytes > 4 * GIB {
+        bytes.div_ceil(2 * GIB) * 2 * GIB
+    } else if bytes > 2 * GIB {
+        bytes.div_ceil(GIB) * GIB
+    } else {
+        bytes
+    }
+}
+
+fn format_binary_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    const TB: f64 = GB * 1024.0;
+    const PB: f64 = TB * 1024.0;
     let bytes_f = bytes as f64;
-    if bytes_f >= TB {
-        format!("{:.1} TB", bytes_f / TB)
+    if bytes_f >= PB {
+        format_quantity(bytes_f / PB, "PiB")
+    } else if bytes_f >= TB {
+        format_quantity(bytes_f / TB, "TiB")
     } else if bytes_f >= GB {
-        format!("{:.1} GB", bytes_f / GB)
+        format_quantity(bytes_f / GB, "GiB")
     } else if bytes_f >= MB {
-        format!("{:.1} MB", bytes_f / MB)
+        format_quantity(bytes_f / MB, "MiB")
     } else if bytes_f >= KB {
-        format!("{:.1} KB", bytes_f / KB)
+        format_quantity(bytes_f / KB, "KiB")
     } else {
         format!("{} B", bytes)
     }
@@ -708,41 +808,40 @@ fn gather_system_info() -> SystemInfo {
 
     // pfetch's "os" field is the friendly long OS name (e.g. "macOS 26.0"),
     // which is exactly what `long_os_version` resolves to here.
-    let operating_system = System::long_os_version()
-        .or_else(System::os_version)
+    let operating_system = host::long_os_version()
+        .or_else(host::os_version)
         .unwrap_or_else(|| "Unknown OS".to_string());
 
-    let cpu = sys
-        .cpus()
-        .first()
-        .map(|cpu| {
-            let brand = cpu.brand().trim();
-            let freq = cpu.frequency();
-            if freq > 0 {
-                format!("{} @ {} MHz", brand, freq)
-            } else {
-                brand.to_string()
+    let cpu = match host::cpu_brand(&sys) {
+        Some(brand) => {
+            let trimmed = brand.trim();
+            match host::cpu_frequency_mhz(&sys) {
+                Some(freq) if freq > 0 => format!("{} @ {} MHz", trimmed, freq),
+                _ => trimmed.to_string(),
             }
-        })
-        .unwrap_or_else(|| "Unknown CPU".to_string());
-
-    let memory_line = format_bytes(sys.total_memory());
-
-    let disk_line = match disk::disk_space() {
-        Some(space) => format!(
-            "{} Free of {}",
-            format_disk_bytes(space.available),
-            format_disk_bytes(space.total)
-        ),
-        None => "Disk information unavailable".to_string(),
+        }
+        None => "Unknown CPU".to_string(),
     };
 
-    let uptime = seconds_to_string(System::uptime());
+    let memory_line = format_binary_bytes(round_installed_memory(host::total_memory_bytes(&sys)));
+
+    let (total_disk, avail_disk) = host::disk_totals();
+    let disk_line = if total_disk > 0 {
+        format!(
+            "{} ({} free)",
+            format_bytes(total_disk),
+            format_bytes(avail_disk)
+        )
+    } else {
+        "Disk information unavailable".to_string()
+    };
+
+    let uptime = seconds_to_string(host::uptime_seconds());
 
     // Firmware-reported hardware identity. `Product` is unimplemented on some
     // platforms (e.g. NetBSD), so treat every field as optional.
-    let vendor = Product::vendor_name().map(|v| v.trim().to_string());
-    let family = Product::family()
+    let vendor = host::product_vendor_name().map(|v| v.trim().to_string());
+    let family = host::product_family()
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty());
     // Overview headline: the friendly model name, or the short hostname when no
@@ -756,11 +855,12 @@ fn gather_system_info() -> SystemInfo {
         machine,
         operating_system,
         vendor,
-        model: Product::name(),
+        model: host::product_name(),
         cpu,
         memory_line,
         disk_line,
-        kernel: System::kernel_long_version(),
+        kernel: host::kernel_long_version(),
+        packages: host::installed_package_count(),
         uptime,
     }
 }
@@ -768,7 +868,7 @@ fn gather_system_info() -> SystemInfo {
 /// First label of the hostname: `peregrine.fritz.box` → `peregrine`. Used as
 /// the headline fallback where no product/model info is available.
 fn short_hostname() -> String {
-    match System::host_name() {
+    match host::host_name() {
         Some(host) => host.split('.').next().unwrap_or(&host).to_string(),
         None => "Computer".to_string(),
     }
@@ -844,5 +944,21 @@ mod tests {
         // Lenovo machine-type codes and unmapped Apple Silicon ids stay as-is.
         assert_eq!(prettify_model("20AN"), "20AN");
         assert_eq!(prettify_model("Mac14,2"), "Mac14,2");
+    }
+
+    #[test]
+    fn round_installed_memory_snaps_to_plausible_sizes() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        // 16 GiB ThinkPad reporting 15.79 GiB after iGPU/BIOS reservations.
+        assert_eq!(round_installed_memory(16_959_840_256), 16 * GIB);
+        // Exact sizes pass through.
+        assert_eq!(round_installed_memory(16 * GIB), 16 * GIB);
+        assert_eq!(round_installed_memory(8 * GIB), 8 * GIB);
+        // 6 GiB (4+2) stays at 6 once snapped to the 2 GiB grid.
+        assert_eq!(round_installed_memory(6 * GIB - 200 * 1024 * 1024), 6 * GIB);
+        // 3 GiB uses the 1 GiB grid (between 2 and 4 GiB).
+        assert_eq!(round_installed_memory(3 * GIB - 100 * 1024 * 1024), 3 * GIB);
+        // Small systems aren't rounded.
+        assert_eq!(round_installed_memory(900_000_000), 900_000_000);
     }
 }
