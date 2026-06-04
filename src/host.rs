@@ -77,9 +77,38 @@ mod native {
     }
     pub fn installed_package_count() -> Option<u32> {
         // sysinfo has no package-manager integration, and the way to count
-        // packages varies per distro/OS. Leaving this unsupported until each
-        // platform has a known cheap path.
-        None
+        // packages varies per distro/OS, so this is filled in per platform as a
+        // cheap path becomes known. Linux currently covers dpkg (Debian and
+        // derivatives); other platforms stay unsupported.
+        #[cfg(target_os = "linux")]
+        {
+            dpkg_installed_count()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    }
+
+    /// Counts the packages dpkg considers fully installed by parsing
+    /// `/var/lib/dpkg/status` — the same database `dpkg-query` reads — directly,
+    /// without spawning the tool. Each stanza carries a `Status:` line and only
+    /// the `install ok installed` state is counted, so packages that were
+    /// removed but left their config behind (`deinstall ok config-files`) are
+    /// excluded. This matches
+    /// `dpkg-query -f '${Status}\n' -W | grep -c 'install ok installed'`.
+    /// Returns None on non-dpkg distros, where the file is absent.
+    #[cfg(target_os = "linux")]
+    fn dpkg_installed_count() -> Option<u32> {
+        let status = std::fs::read_to_string("/var/lib/dpkg/status").ok()?;
+        let n = status
+            .lines()
+            .filter(|line| {
+                line.strip_prefix("Status:")
+                    .is_some_and(|s| s.trim() == "install ok installed")
+            })
+            .count();
+        Some(n as u32)
     }
     /// Sum of the *physical* disk capacities, read from each `\\.\PhysicalDriveN`
     /// via `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`. Removable and USB-attached drives
@@ -229,18 +258,14 @@ mod native {
             let base = entry.path();
 
             // removable == 1 covers USB sticks, SD cards and optical media.
-            if std::fs::read_to_string(base.join("removable"))
-                .is_ok_and(|s| s.trim() == "1")
-            {
+            if std::fs::read_to_string(base.join("removable")).is_ok_and(|s| s.trim() == "1") {
                 continue;
             }
 
             // USB-attached fixed drives report removable == 0, so additionally
             // check the bus: `/sys/block/<dev>` is a symlink into the device
             // tree, and a USB device's resolved path contains a `/usb` element.
-            if std::fs::canonicalize(&base)
-                .is_ok_and(|p| p.to_string_lossy().contains("/usb"))
-            {
+            if std::fs::canonicalize(&base).is_ok_and(|p| p.to_string_lossy().contains("/usb")) {
                 continue;
             }
 
