@@ -189,15 +189,81 @@ mod native {
         total
     }
 
+    /// Sum of the *physical* disk capacities, read from `/sys/block/`. Each
+    /// whole-disk entry's `size` file is a count of 512-byte sectors — the
+    /// kernel always reports this unit regardless of the drive's real
+    /// logical/physical sector size. Mirroring the OpenBSD/Windows paths, the
+    /// following are excluded so they don't inflate or double-count the
+    /// installed-storage figure:
+    ///
+    ///  - removable and USB-attached drives — a plugged-in stick or external
+    ///    SSD shouldn't count as installed storage,
+    ///  - virtual block devices layered over real disks: device-mapper (`dm-*`,
+    ///    covering LVM and LUKS) and mdraid (`md*`), like OpenBSD's softraid,
+    ///  - loop/ram/zram pseudo-devices and optical/floppy drives (`sr*`, `fd*`).
+    ///
+    /// `/sys/block` lists only whole disks, never partitions, so no extra
+    /// partition filtering is needed. Returns 0 if it can't be read.
+    #[cfg(target_os = "linux")]
+    fn physical_disk_total_bytes() -> u64 {
+        let Ok(entries) = std::fs::read_dir("/sys/block") else {
+            return 0;
+        };
+
+        let mut total: u64 = 0;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+
+            if name.starts_with("loop")
+                || name.starts_with("ram")
+                || name.starts_with("zram")
+                || name.starts_with("dm-")
+                || name.starts_with("md")
+                || name.starts_with("sr")
+                || name.starts_with("fd")
+            {
+                continue;
+            }
+
+            let base = entry.path();
+
+            // removable == 1 covers USB sticks, SD cards and optical media.
+            if std::fs::read_to_string(base.join("removable"))
+                .is_ok_and(|s| s.trim() == "1")
+            {
+                continue;
+            }
+
+            // USB-attached fixed drives report removable == 0, so additionally
+            // check the bus: `/sys/block/<dev>` is a symlink into the device
+            // tree, and a USB device's resolved path contains a `/usb` element.
+            if std::fs::canonicalize(&base)
+                .is_ok_and(|p| p.to_string_lossy().contains("/usb"))
+            {
+                continue;
+            }
+
+            if let Some(sectors) = std::fs::read_to_string(base.join("size"))
+                .ok()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+            {
+                total += sectors * 512;
+            }
+        }
+
+        total
+    }
+
     /// (total, available) for the about-box's Disk row.
     ///
     /// `available` is always the sum of free space across mounted filesystems.
     /// `total` is the installed-storage figure: on Windows the summed physical
-    /// disk capacity (matching the OpenBSD/macOS behaviour of reporting the
-    /// actual hardware size rather than just mounted volumes), falling back to
-    /// filesystem totals if no physical disk could be read. On macOS/Linux the
-    /// filesystem total already tracks the installed capacity closely enough, so
-    /// it's used directly.
+    /// disk capacity and on Linux the summed `/sys/block` device capacity —
+    /// both reporting the actual hardware size rather than just mounted
+    /// volumes, and both falling back to filesystem totals if no physical disk
+    /// could be read. On macOS the filesystem total already tracks the
+    /// installed capacity closely enough, so it's used directly.
     pub fn disk_totals() -> (u64, u64) {
         use sysinfo::Disks;
         let mut fs_total = 0u64;
@@ -207,12 +273,12 @@ mod native {
             fs_avail += disk.available_space();
         }
 
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         let total = {
             let physical = physical_disk_total_bytes();
             if physical > 0 { physical } else { fs_total }
         };
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let total = fs_total;
 
         (total, fs_avail)
