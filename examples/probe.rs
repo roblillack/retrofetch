@@ -41,6 +41,10 @@ fn main() {
         "host::kernel_long_version()   = {:?}",
         host::kernel_long_version()
     );
+    println!(
+        "host::window_manager()        = {:?}",
+        host::window_manager()
+    );
     println!("---");
     println!(
         "host::cpu_brand()             = {:?}",

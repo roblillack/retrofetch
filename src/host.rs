@@ -2,12 +2,123 @@
 //! OpenBSD. On every other supported platform these delegate straight to
 //! `sysinfo`; on OpenBSD they shell out to `uname` / `sysctl(8)` instead so the
 //! about-box doesn't end up showing "Unknown" for every Software/Hardware row.
+//!
+//! [`window_manager`] sits outside that native/OpenBSD split: it's purely
+//! environment-based (no `sysinfo`), so one definition serves every platform.
 
 #[cfg(not(target_os = "openbsd"))]
 pub use native::*;
 
 #[cfg(target_os = "openbsd")]
 pub use openbsd::*;
+
+/// Compositor (on Wayland) or window manager (on X11) together with the
+/// windowing system, for the about-box "WM" row — e.g. `"River (Wayland)"` or
+/// `"i3 (X11)"`. Detection is environment-based and needs no X11/Wayland client
+/// libraries, so it can't name a window manager an X11 server is hiding behind
+/// EWMH; it reports what the session advertises about itself.
+///
+/// Returns `None` when nothing can be determined — a non-graphical (tty)
+/// session, or a platform without the concept — so the row is hidden like the
+/// other optional fields. macOS and Windows don't have the X11/Wayland split
+/// this row describes, so the row is omitted there entirely.
+pub fn window_manager() -> Option<String> {
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    {
+        None
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        match (wm_name(), windowing_system()) {
+            (Some(name), Some(system)) => Some(format!("{name} ({system})")),
+            (Some(name), None) => Some(name),
+            // No name, but we still know we're on a graphical session.
+            (None, Some(system)) => Some(format!("({system})")),
+            (None, None) => None,
+        }
+    }
+}
+
+/// `"Wayland"` / `"X11"` for the windowing system, or `None` on a tty. A live
+/// Wayland socket in the environment is the strongest signal and wins even on a
+/// Wayland session running XWayland (where `DISPLAY` is set too); only with no
+/// display socket at all do we fall back to the session type logind advertises.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn windowing_system() -> Option<String> {
+    fn nonempty(key: &str) -> Option<String> {
+        std::env::var(key).ok().filter(|v| !v.is_empty())
+    }
+
+    if nonempty("WAYLAND_DISPLAY").is_some() {
+        return Some("Wayland".to_string());
+    }
+    if nonempty("DISPLAY").is_some() {
+        return Some("X11".to_string());
+    }
+    match nonempty("XDG_SESSION_TYPE").as_deref() {
+        Some("wayland") => Some("Wayland".to_string()),
+        Some("x11") => Some("X11".to_string()),
+        _ => None,
+    }
+}
+
+/// The desktop the session advertises itself as: `XDG_CURRENT_DESKTOP`
+/// ("River", "GNOME", "sway"), falling back to the older `DESKTOP_SESSION`.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn wm_name() -> Option<String> {
+    std::env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .and_then(|v| normalize_desktop_name(&v))
+        .or_else(|| {
+            std::env::var("DESKTOP_SESSION")
+                .ok()
+                .and_then(|v| normalize_desktop_name(&v))
+        })
+}
+
+/// Reduce a raw `XDG_CURRENT_DESKTOP` / `DESKTOP_SESSION` value to a single
+/// display name. `XDG_CURRENT_DESKTOP` is a colon-separated list whose entries
+/// run generic-to-specific ("ubuntu:GNOME"), so the last one is the actual
+/// desktop; a leading "X-" ("X-Cinnamon") is a historical prefix and dropped.
+/// Returns `None` if nothing usable remains.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn normalize_desktop_name(raw: &str) -> Option<String> {
+    let last = raw.rsplit(':').next().unwrap_or(raw).trim();
+    let name = last.strip_prefix("X-").unwrap_or(last).trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+#[cfg(all(test, not(any(target_os = "macos", target_os = "windows"))))]
+mod tests {
+    use super::normalize_desktop_name;
+
+    #[test]
+    fn normalize_desktop_name_picks_the_specific_entry() {
+        assert_eq!(normalize_desktop_name("River").as_deref(), Some("River"));
+        // Distro-prefixed lists keep the trailing, specific desktop.
+        assert_eq!(
+            normalize_desktop_name("ubuntu:GNOME").as_deref(),
+            Some("GNOME")
+        );
+        assert_eq!(
+            normalize_desktop_name("pop:GNOME").as_deref(),
+            Some("GNOME")
+        );
+        // The historical "X-" prefix is dropped.
+        assert_eq!(
+            normalize_desktop_name("X-Cinnamon").as_deref(),
+            Some("Cinnamon")
+        );
+        // Blank / separator-only values yield nothing.
+        assert_eq!(normalize_desktop_name(""), None);
+        assert_eq!(normalize_desktop_name("  "), None);
+        assert_eq!(normalize_desktop_name(":"), None);
+    }
+}
 
 #[cfg(not(target_os = "openbsd"))]
 mod native {

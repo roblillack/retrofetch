@@ -51,6 +51,10 @@ struct SystemInfo {
     /// Kernel name and version (e.g. "Darwin 25.5.0"). Shown in the Software
     /// group.
     kernel: String,
+    /// Compositor (Wayland) or window manager (X11) plus the windowing system,
+    /// e.g. "River (Wayland)". Shown in the Software group; `None` hides the row
+    /// on a tty session or a platform without the concept.
+    window_manager: Option<String>,
     /// Number of installed packages, when the OS exposes a cheap way to count
     /// them. `None` hides the row.
     packages: Option<u32>,
@@ -115,6 +119,9 @@ fn compute_content_width(info: &SystemInfo, family: Option<&str>, body_size: f32
     if let Some(m) = &info.model {
         values.push(m);
     }
+    if let Some(wm) = &info.window_manager {
+        values.push(wm);
+    }
     let pkg_str;
     if let Some(n) = info.packages {
         pkg_str = n.to_string();
@@ -161,6 +168,9 @@ fn build_about_box(info: &SystemInfo, content_width: i32) -> Container {
 
     let mut software: Vec<(&str, &str)> = Vec::new();
     software.push(("System", &info.kernel));
+    if let Some(wm) = &info.window_manager {
+        software.push(("WM", wm));
+    }
     let packages_str;
     if let Some(n) = info.packages {
         packages_str = n.to_string();
@@ -860,6 +870,7 @@ fn gather_system_info() -> SystemInfo {
         memory_line,
         disk_line,
         kernel: host::kernel_long_version(),
+        window_manager: host::window_manager(),
         packages: host::installed_package_count(),
         uptime,
     }
