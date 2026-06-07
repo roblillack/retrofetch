@@ -18,7 +18,7 @@ exclude = ["screenshot.png"]
 
 [dependencies]
 saudade = "0.3"
-sysinfo = "0.39"
+sysinfo = "0.38"
 regex = "1"
 
 [target.'cfg(windows)'.dependencies]
