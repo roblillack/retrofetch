@@ -50,6 +50,9 @@ impl Widget for LogoCell {
 fn main() {
     // (display name, baked logo) — same set retrofetch picks from in
     // `logo_svg_for`, ordered to fill three rows.
+    // tux.svg uses SVG features (a filter, group opacity) that `include_svg!`
+    // can't bake; the macro flags this via a `deprecated` warning we can't act on.
+    #[allow(deprecated)]
     let logos: [(&str, SvgImage); 14] = [
         ("Apple", include_svg!("assets/os/apple.svg")),
         ("Arch", include_svg!("assets/os/arch.svg")),

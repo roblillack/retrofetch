@@ -294,6 +294,9 @@ fn logo_svg_for(distribution_id: &str) -> SvgImage {
     const NIXOS: SvgImage = include_svg!("assets/os/nixos.svg");
     const OPENBSD: SvgImage = include_svg!("assets/os/openbsd.svg");
     const OPENSUSE: SvgImage = include_svg!("assets/os/opensuse.svg");
+    // tux.svg uses SVG features (a filter, group opacity) that `include_svg!`
+    // can't bake; the macro flags this via a `deprecated` warning we can't act on.
+    #[allow(deprecated)]
     const TUX: SvgImage = include_svg!("assets/os/tux.svg");
     const UBUNTU: SvgImage = include_svg!("assets/os/ubuntu.svg");
     const WINDOWS: SvgImage = include_svg!("assets/os/windows.svg");
