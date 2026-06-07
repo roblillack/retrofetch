@@ -427,15 +427,75 @@ mod native {
         total
     }
 
+    /// Sum of the *physical* disk capacities, read from `kern.geom.conftxt` —
+    /// FreeBSD's GEOM topology in text form. Each top-level disk appears as a
+    /// `0 DISK <name> <size_bytes> <sector_size> ...` line, so the size is
+    /// available without spawning a tool or opening the device (which requires
+    /// privileges for `diskinfo`/`camcontrol`). Mirroring the other platforms,
+    /// the following are excluded so they don't inflate the figure:
+    ///
+    ///  - USB mass-storage drives — detected via dmesg.boot, where the `daN`
+    ///    that appears for a USB stick attaches under `umass-simN`. Internal
+    ///    drives (`ada*`/`nvd*`/`nvme*`/`nda*`) never go through umass.
+    ///  - Memory disks (`md*`), CD/DVD drives (`cd*`/`acd*`), and SD cards
+    ///    (`mmcsd*`) — virtual or removable media.
+    ///
+    /// Returns 0 when the sysctl can't be read.
+    #[cfg(target_os = "freebsd")]
+    fn physical_disk_total_bytes() -> u64 {
+        use std::collections::HashSet;
+
+        let usb_disks: HashSet<String> = std::fs::read_to_string("/var/run/dmesg.boot")
+            .map(|text| {
+                text.lines()
+                    .filter_map(|line| {
+                        let dev = line.split([' ', ':']).next()?;
+                        if !dev.starts_with("da") || !line.contains(" at umass") {
+                            return None;
+                        }
+                        Some(dev.to_string())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let Some(text) = sysctl("kern.geom.conftxt") else {
+            return 0;
+        };
+
+        let mut total: u64 = 0;
+        for line in text.lines() {
+            let mut parts = line.split_whitespace();
+            // Top-level entries start with rank `0`; partitions/labels are deeper.
+            if parts.next() != Some("0") || parts.next() != Some("DISK") {
+                continue;
+            }
+            let Some(name) = parts.next() else { continue };
+            if name.starts_with("md")
+                || name.starts_with("cd")
+                || name.starts_with("acd")
+                || name.starts_with("mmcsd")
+                || usb_disks.contains(name)
+            {
+                continue;
+            }
+            if let Some(size) = parts.next().and_then(|s| s.parse::<u64>().ok()) {
+                total += size;
+            }
+        }
+        total
+    }
+
     /// (total, available) for the about-box's Disk row.
     ///
     /// `available` is always the sum of free space across mounted filesystems.
     /// `total` is the installed-storage figure: on Windows the summed physical
-    /// disk capacity and on Linux the summed `/sys/block` device capacity —
-    /// both reporting the actual hardware size rather than just mounted
-    /// volumes, and both falling back to filesystem totals if no physical disk
-    /// could be read. On macOS the filesystem total already tracks the
-    /// installed capacity closely enough, so it's used directly.
+    /// disk capacity, on Linux the summed `/sys/block` device capacity, and on
+    /// FreeBSD the summed `kern.geom.conftxt` device capacity — all reporting
+    /// the actual hardware size rather than just mounted volumes, and all
+    /// falling back to filesystem totals if no physical disk could be read. On
+    /// macOS the filesystem total already tracks the installed capacity
+    /// closely enough, so it's used directly.
     pub fn disk_totals() -> (u64, u64) {
         use sysinfo::Disks;
         let mut fs_total = 0u64;
@@ -445,12 +505,12 @@ mod native {
             fs_avail += disk.available_space();
         }
 
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "freebsd"))]
         let total = {
             let physical = physical_disk_total_bytes();
             if physical > 0 { physical } else { fs_total }
         };
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "freebsd")))]
         let total = fs_total;
 
         (total, fs_avail)
