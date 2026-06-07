@@ -10,7 +10,7 @@ homepage = "https://github.com/roblillack/retrofetch"
 license = "MIT"
 readme = "README.md"
 keywords = ["neofetch", "system-info", "fetch", "retro", "gui"]
-categories = ["command-line-utilities", "gui"]
+categories = ["gui", "hardware-support"]
 
 # Whitelist what ships in the published crate. The OS logos are baked into the
 # binary at compile time by `include_svg!`, so they must be in the package; the
