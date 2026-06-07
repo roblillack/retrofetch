@@ -164,10 +164,37 @@ mod native {
         }
     }
 
+    /// Read a sysctl key as a string by shelling out to `/sbin/sysctl -n`.
+    /// FreeBSD's sysinfo backend leaves the CPU brand empty, so we fall back
+    /// to `hw.model` just like the OpenBSD path does.
+    #[cfg(target_os = "freebsd")]
+    fn sysctl(key: &str) -> Option<String> {
+        let out = std::process::Command::new("/sbin/sysctl")
+            .args(["-n", key])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8(out.stdout).ok()?;
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    }
+
     pub fn cpu_brand(sys: &System) -> Option<String> {
         // On Windows, try registry first as sysinfo may return empty brand
         #[cfg(windows)]
         if let Some(brand) = cpu_brand_from_registry() {
+            return Some(brand);
+        }
+
+        // sysinfo's FreeBSD backend reports an empty brand, so read hw.model.
+        #[cfg(target_os = "freebsd")]
+        if let Some(brand) = sysctl("hw.model") {
             return Some(brand);
         }
 
@@ -178,6 +205,15 @@ mod native {
             .filter(|s| !s.trim().is_empty())
     }
     pub fn cpu_frequency_mhz(sys: &System) -> Option<u64> {
+        // On FreeBSD the brand from `hw.model` already encodes the nominal
+        // frequency (e.g. "Intel(R) Core(TM) i5-4300M CPU @ 2.60GHz"), so
+        // appending sysinfo's MHz would duplicate it on the CPU row.
+        #[cfg(target_os = "freebsd")]
+        {
+            let _ = sys;
+            None
+        }
+        #[cfg(not(target_os = "freebsd"))]
         sys.cpus().first().map(|c| c.frequency())
     }
     pub fn total_memory_bytes(sys: &System) -> u64 {
