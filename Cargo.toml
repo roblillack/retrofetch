@@ -12,9 +12,17 @@ readme = "README.md"
 keywords = ["neofetch", "system-info", "fetch", "retro", "gui"]
 categories = ["command-line-utilities", "gui"]
 
-# The screenshot is only used by the README on GitHub/crates.io (via an absolute
-# URL), so it doesn't need to ship inside the published crate.
-exclude = ["screenshot.png"]
+# Whitelist what ships in the published crate. The OS logos are baked into the
+# binary at compile time by `include_svg!`, so they must be in the package; the
+# DejaVu fonts under tests/, the examples, the README screenshot and the
+# editor/CI directories are only needed in-repo and stay out.
+include = [
+    "src/**/*.rs",
+    "assets/os/*.svg",
+    "Cargo.toml",
+    "README.md",
+    "LICENSE",
+]
 
 [dependencies]
 saudade = "0.3"
