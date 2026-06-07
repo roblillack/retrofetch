@@ -63,7 +63,12 @@ fn windowing_system() -> Option<String> {
 }
 
 /// The desktop the session advertises itself as: `XDG_CURRENT_DESKTOP`
-/// ("River", "GNOME", "sway"), falling back to the older `DESKTOP_SESSION`.
+/// ("River", "GNOME", "sway"), falling back to the older `DESKTOP_SESSION`,
+/// and finally to walking the parent-process chain for a known compositor or
+/// window-manager binary. The process-tree fallback matters on FreeBSD (and
+/// other setups without logind), where compositors are typically launched
+/// straight from a login shell and never get `XDG_CURRENT_DESKTOP` set for
+/// their children.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn wm_name() -> Option<String> {
     std::env::var("XDG_CURRENT_DESKTOP")
@@ -74,6 +79,109 @@ fn wm_name() -> Option<String> {
                 .ok()
                 .and_then(|v| normalize_desktop_name(&v))
         })
+        .or_else(wm_from_process_tree)
+}
+
+/// Names the active compositor / window manager by inspecting the process
+/// list. First walks the parent chain from our own pid — accurate when it
+/// works, but fails when a daemonizing intermediary like tmux or screen has
+/// reparented our shell to init, severing the link to the compositor. As a
+/// second pass, scans every process owned by our uid and returns the first
+/// known compositor binary found. The walk is depth-capped to defend against
+/// pathological loops in the snapshot.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn wm_from_process_tree() -> Option<String> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        // exe() is far more reliable than name() for matching: argv[0] can be
+        // a window title (tmux: "tmux: server (...)") or include odd suffixes,
+        // while the binary path is canonical.
+        ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+    );
+
+    let mut pid = Pid::from_u32(std::process::id());
+    let our_uid = sys.process(pid).and_then(|p| p.user_id().cloned());
+    for _ in 0..32 {
+        let Some(proc) = sys.process(pid) else { break };
+        if let Some(canonical) = match_compositor(&proc_basename(proc)) {
+            return Some(canonical.to_string());
+        }
+        let Some(parent) = proc.parent() else { break };
+        pid = parent;
+    }
+
+    // Ancestor walk turned up nothing — likely because tmux/screen broke the
+    // chain. Scan everything our user owns and pick the first known
+    // compositor; in practice a user runs one at a time, so a uid filter is
+    // enough to avoid grabbing another user's session on a multi-seat box.
+    let our_uid = our_uid?;
+    for proc in sys.processes().values() {
+        if proc.user_id() != Some(&our_uid) {
+            continue;
+        }
+        if let Some(canonical) = match_compositor(&proc_basename(proc)) {
+            return Some(canonical.to_string());
+        }
+    }
+    None
+}
+
+/// Extracts the basename of a process's executable for matching against the
+/// known-compositor list. Prefers `exe()` (the canonical binary path) over
+/// `name()`, which on FreeBSD comes from argv[0] and can be a process-title
+/// string set by the program itself (e.g. tmux: "tmux: server (...)").
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn proc_basename(proc: &sysinfo::Process) -> String {
+    if let Some(exe) = proc.exe()
+        && let Some(file) = exe.file_name()
+    {
+        return file.to_string_lossy().into_owned();
+    }
+    proc.name().to_string_lossy().into_owned()
+}
+
+/// Maps a process basename (as reported by sysinfo, which on FreeBSD comes
+/// from argv[0] with `ki_comm` as a truncated fallback) to the display name
+/// shown in the WM row. The list covers the compositors and window managers
+/// we expect to see on a Linux/BSD desktop; anything unknown returns `None`
+/// so the walk keeps climbing rather than labelling a random ancestor.
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn match_compositor(raw: &str) -> Option<&'static str> {
+    // sysinfo can hand us the full path or a trailing argument; collapse to
+    // the bare basename before comparing.
+    let base = std::path::Path::new(raw)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| raw.to_string());
+    let key = base.to_ascii_lowercase();
+    Some(match key.as_str() {
+        "sway" => "Sway",
+        "river" => "River",
+        "hyprland" => "Hyprland",
+        "labwc" => "Labwc",
+        "wayfire" => "Wayfire",
+        "niri" => "Niri",
+        "weston" => "Weston",
+        "cage" => "Cage",
+        "cosmic-comp" => "COSMIC",
+        "gnome-shell" | "mutter" => "GNOME",
+        "kwin_wayland" | "kwin_x11" | "kwin" => "KWin",
+        "plasmashell" => "Plasma",
+        "xfwm4" => "Xfwm",
+        "i3" => "i3",
+        "bspwm" => "bspwm",
+        "openbox" => "Openbox",
+        "awesome" => "awesome",
+        "fluxbox" => "Fluxbox",
+        "dwm" => "dwm",
+        "icewm" => "IceWM",
+        "jwm" => "JWM",
+        _ => return None,
+    })
 }
 
 /// Reduce a raw `XDG_CURRENT_DESKTOP` / `DESKTOP_SESSION` value to a single
@@ -94,7 +202,20 @@ fn normalize_desktop_name(raw: &str) -> Option<String> {
 
 #[cfg(all(test, not(any(target_os = "macos", target_os = "windows"))))]
 mod tests {
-    use super::normalize_desktop_name;
+    use super::{match_compositor, normalize_desktop_name};
+
+    #[test]
+    fn match_compositor_recognises_known_binaries() {
+        assert_eq!(match_compositor("river"), Some("River"));
+        assert_eq!(match_compositor("sway"), Some("Sway"));
+        // Case-insensitive (Hyprland's binary is capitalised).
+        assert_eq!(match_compositor("Hyprland"), Some("Hyprland"));
+        // Accepts a full path — only the basename is matched.
+        assert_eq!(match_compositor("/usr/local/bin/river"), Some("River"));
+        // Unknown ancestors return None so the walk keeps climbing.
+        assert_eq!(match_compositor("bash"), None);
+        assert_eq!(match_compositor("alacritty"), None);
+    }
 
     #[test]
     fn normalize_desktop_name_picks_the_specific_entry() {
