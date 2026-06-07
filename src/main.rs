@@ -2,12 +2,11 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use regex::Regex;
-use resvg::{tiny_skia, usvg};
 use retrofetch::host;
 use saudade::EventCtx;
 use saudade::{
-    App, Button, Color, Container, Event, Font, Image, Key, Label, MouseButton, NamedKey, Painter,
-    PopupRequest, Rect, Theme, Widget, WindowConfig,
+    App, Button, Color, Container, Event, Font, Key, Label, MouseButton, NamedKey, Painter,
+    PopupRequest, Rect, SvgImage, Theme, Widget, WindowConfig, include_svg,
 };
 use sysinfo::System;
 
@@ -244,15 +243,33 @@ fn push_rows(root: &mut Container, top_y: i32, rows: &[(&str, &str)], content_ri
     }
 }
 
-/// Build the OS-logo image: detect the host OS/distro, rasterize its embedded
-/// SVG into the logo box, and hand the pixels to an [`Image`] widget. If the
-/// SVG can't be parsed/rendered the logo is simply left blank rather than
-/// failing the whole dialog.
-fn build_os_logo(x: i32, y: i32, w: i32, h: i32) -> Image {
-    let svg = logo_svg_for(&System::distribution_id());
-    match rasterize_logo(svg, w, h) {
-        Some(pixels) => Image::from_pixels(x, y, w, h, pixels),
-        None => Image::new(x, y, w, h),
+/// Build the OS-logo widget: detect the host OS/distro and hand its
+/// compile-time-baked SVG to a [`Logo`] widget, which fills the vector crisply
+/// at the window's live DPI.
+fn build_os_logo(x: i32, y: i32, w: i32, h: i32) -> Logo {
+    Logo {
+        rect: Rect::new(x, y, w, h),
+        image: logo_svg_for(&System::distribution_id()),
+    }
+}
+
+/// An OS logo drawn from a compile-time-baked [`SvgImage`]. `include_svg!`
+/// flattens each mark into solid-color polygons at build time, so the binary
+/// ships no SVG parser; [`Painter::draw_svg`] fills those polygons aspect-fit
+/// and centered in `rect`, at the live device resolution — the mark stays sharp
+/// at any DPI or size, with anti-aliased edges blended over the real background.
+struct Logo {
+    rect: Rect,
+    image: SvgImage,
+}
+
+impl Widget for Logo {
+    fn bounds(&self) -> Rect {
+        self.rect
+    }
+
+    fn paint(&mut self, painter: &mut Painter, _theme: &Theme) {
+        painter.draw_svg(&self.image, self.rect);
     }
 }
 
@@ -262,21 +279,24 @@ fn build_os_logo(x: i32, y: i32, w: i32, h: i32) -> Image {
 /// are matched). Known major distros, the BSDs, macOS and Windows get their
 /// own mark; everything else — including unrecognised Linux distros and the
 /// bare `"linux"` fallback — falls back to the generic Tux penguin.
-fn logo_svg_for(distribution_id: &str) -> &'static str {
-    const APPLE: &str = include_str!("../assets/os/apple.svg");
-    const ARCH: &str = include_str!("../assets/os/arch.svg");
-    const DEBIAN: &str = include_str!("../assets/os/debian.svg");
-    const FEDORA: &str = include_str!("../assets/os/fedora.svg");
-    const FREEBSD: &str = include_str!("../assets/os/freebsd.svg");
-    const MINT: &str = include_str!("../assets/os/linuxmint.svg");
-    const MANJARO: &str = include_str!("../assets/os/manjaro.svg");
-    const NETBSD: &str = include_str!("../assets/os/netbsd.svg");
-    const NIXOS: &str = include_str!("../assets/os/nixos.svg");
-    const OPENBSD: &str = include_str!("../assets/os/openbsd.svg");
-    const OPENSUSE: &str = include_str!("../assets/os/opensuse.svg");
-    const TUX: &str = include_str!("../assets/os/tux.svg");
-    const UBUNTU: &str = include_str!("../assets/os/ubuntu.svg");
-    const WINDOWS: &str = include_str!("../assets/os/windows.svg");
+fn logo_svg_for(distribution_id: &str) -> SvgImage {
+    // Baked at compile time by `include_svg!`, whose path is resolved relative
+    // to the crate's `CARGO_MANIFEST_DIR` (not this source file), so the names
+    // start from the crate root.
+    const APPLE: SvgImage = include_svg!("assets/os/apple.svg");
+    const ARCH: SvgImage = include_svg!("assets/os/arch.svg");
+    const DEBIAN: SvgImage = include_svg!("assets/os/debian.svg");
+    const FEDORA: SvgImage = include_svg!("assets/os/fedora.svg");
+    const FREEBSD: SvgImage = include_svg!("assets/os/freebsd.svg");
+    const MINT: SvgImage = include_svg!("assets/os/linuxmint.svg");
+    const MANJARO: SvgImage = include_svg!("assets/os/manjaro.svg");
+    const NETBSD: SvgImage = include_svg!("assets/os/netbsd.svg");
+    const NIXOS: SvgImage = include_svg!("assets/os/nixos.svg");
+    const OPENBSD: SvgImage = include_svg!("assets/os/openbsd.svg");
+    const OPENSUSE: SvgImage = include_svg!("assets/os/opensuse.svg");
+    const TUX: SvgImage = include_svg!("assets/os/tux.svg");
+    const UBUNTU: SvgImage = include_svg!("assets/os/ubuntu.svg");
+    const WINDOWS: SvgImage = include_svg!("assets/os/windows.svg");
 
     match distribution_id {
         "ubuntu" => UBUNTU,
@@ -296,45 +316,6 @@ fn logo_svg_for(distribution_id: &str) -> &'static str {
         id if id.starts_with("opensuse") => OPENSUSE,
         _ => TUX,
     }
-}
-
-/// Rasterize an SVG into a `w`×`h` ARGB32 buffer for [`Image::from_pixels`].
-///
-/// `tiny_skia` renders premultiplied RGBA. The `Image` widget skips fully
-/// transparent pixels and otherwise writes the colour opaquely (it does not
-/// blend), so anti-aliased edges are composited over white — the about-box
-/// background — here, and fully transparent pixels are left transparent so
-/// that background still shows through.
-fn rasterize_logo(svg: &str, w: i32, h: i32) -> Option<Vec<u32>> {
-    if w <= 0 || h <= 0 {
-        return None;
-    }
-    let (w, h) = (w as u32, h as u32);
-
-    let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).ok()?;
-    let mut pixmap = tiny_skia::Pixmap::new(w, h)?;
-
-    // Scale the SVG to fit the box while preserving aspect ratio, then centre.
-    let size = tree.size();
-    let scale = (w as f32 / size.width()).min(h as f32 / size.height());
-    let tx = (w as f32 - size.width() * scale) * 0.5;
-    let ty = (h as f32 - size.height() * scale) * 0.5;
-    let transform = tiny_skia::Transform::from_scale(scale, scale).post_translate(tx, ty);
-    resvg::render(&tree, transform, &mut pixmap.as_mut());
-
-    let mut out = vec![0u32; (w * h) as usize];
-    for (px, chunk) in out.iter_mut().zip(pixmap.data().chunks_exact(4)) {
-        let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
-        if a == 0 {
-            continue;
-        }
-        // Premultiplied source over an opaque white background:
-        // out = src + white * (1 - a). With white == 255, that is src + (255 - a).
-        let inv = 255 - a as u32;
-        let comp = |c: u8| (c as u32 + inv).min(255);
-        *px = 0xFF00_0000 | (comp(r) << 16) | (comp(g) << 8) | comp(b);
-    }
-    Some(out)
 }
 
 /// Root widget. Normally a transparent wrapper around the about-box
