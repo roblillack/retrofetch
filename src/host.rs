@@ -245,12 +245,17 @@ mod native {
         // sysinfo has no package-manager integration, and the way to count
         // packages varies per distro/OS, so this is filled in per platform as a
         // cheap path becomes known. Linux currently covers dpkg (Debian and
-        // derivatives); other platforms stay unsupported.
+        // derivatives) and FreeBSD asks pkg(8); other platforms stay
+        // unsupported.
         #[cfg(target_os = "linux")]
         {
             dpkg_installed_count()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "freebsd")]
+        {
+            pkg_installed_count()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
         {
             None
         }
@@ -274,6 +279,30 @@ mod native {
                     .is_some_and(|s| s.trim() == "install ok installed")
             })
             .count();
+        Some(n as u32)
+    }
+
+    /// Counts the packages pkg(8) reports as installed by running
+    /// `pkg info -q` and tallying its output lines — `-q` strips the version
+    /// suffix and description, leaving exactly one bare package name per
+    /// installed package. `/usr/sbin/pkg` is the bootstrap shim shipped in
+    /// base FreeBSD; when pkg is installed it execs `/usr/local/sbin/pkg`,
+    /// and when it isn't, it exits non-zero (so we return None) rather than
+    /// prompting, because our stdin is a pipe rather than a TTY. Parsing
+    /// `/var/db/pkg/local.sqlite` directly would skip the fork but pull in
+    /// a sqlite dependency, which isn't worth it for one row.
+    #[cfg(target_os = "freebsd")]
+    fn pkg_installed_count() -> Option<u32> {
+        let out = std::process::Command::new("/usr/sbin/pkg")
+            .args(["info", "-q"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = std::str::from_utf8(&out.stdout).ok()?;
+        let n = s.lines().filter(|l| !l.trim().is_empty()).count();
         Some(n as u32)
     }
     /// Sum of the *physical* disk capacities, read from each `\\.\PhysicalDriveN`
