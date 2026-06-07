@@ -125,6 +125,17 @@ mod native {
     use sysinfo::{Product, System};
 
     pub fn long_os_version() -> Option<String> {
+        // On FreeBSD, sysinfo's long_os_version reports the full kernel boot
+        // identity (e.g. "FreeBSD 15.0-RELEASE-p9 releng/... GENERIC") — too
+        // noisy for the OS row. Build the short "FreeBSD 15.0" form instead;
+        // the boot identity moves to kernel_long_version below.
+        #[cfg(target_os = "freebsd")]
+        {
+            let name = System::name()?;
+            let ver = System::os_version()?;
+            return Some(format!("{name} {ver}"));
+        }
+        #[cfg(not(target_os = "freebsd"))]
         System::long_os_version()
     }
     pub fn os_version() -> Option<String> {
@@ -134,6 +145,14 @@ mod native {
         System::host_name()
     }
     pub fn kernel_long_version() -> String {
+        // On FreeBSD, sysinfo's kernel_long_version is the kernel build number
+        // (e.g. "FreeBSD 199506"), which isn't what users expect on the Kernel
+        // row. The full boot identity from sysinfo's long_os_version is — it
+        // carries a trailing newline, so trim it.
+        #[cfg(target_os = "freebsd")]
+        if let Some(v) = System::long_os_version() {
+            return v.trim().to_string();
+        }
         System::kernel_long_version()
     }
     pub fn product_vendor_name() -> Option<String> {
