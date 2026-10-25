@@ -89,7 +89,7 @@ pub struct SystemInfo {
 /// (separate from `info.machine`, which may be the prettified name or a
 /// hostname fallback). Pass [`None`] to skip the headline pass.
 pub fn compute_content_width(info: &SystemInfo, family: Option<&str>, body_size: f32) -> i32 {
-    let Some(font) = Font::load_system() else {
+    let Some(font) = Font::load_sans() else {
         return MIN_CONTENT_WIDTH;
     };
     content_width_with_font(info, family, body_size, &font)

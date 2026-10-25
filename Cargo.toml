@@ -25,13 +25,13 @@ include = [
 ]
 
 [dependencies]
-saudade = "0.3"
-sysinfo = "0.38"
+saudade = "0.7"
+sysinfo = "0.39"
 regex = "1"
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.52"
-windows-sys = { version = "0.59", features = [
+winreg = "0.56"
+windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Storage_FileSystem",

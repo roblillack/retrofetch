@@ -103,6 +103,7 @@ impl Widget for AboutWithEasterEgg {
         if let Event::PointerDown {
             pos,
             button: MouseButton::Left,
+            ..
         } = event
             && ui::LOGO_HIT.contains(*pos)
             && self.register_logo_click(Instant::now())

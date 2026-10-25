@@ -48,7 +48,7 @@ fn main() {
     let backend = MockBackend::new(content_width, height)
         .with_scale(SCALE)
         .with_theme(theme)
-        .with_font(sans)
+        .with_sans_font(sans)
         .with_mono_font(mono);
 
     let chrome = WindowChrome::dialog("About This Computer");
@@ -79,11 +79,11 @@ fn sample_info() -> SystemInfo {
 }
 
 fn sans_font() -> Font {
-    Font::from_bytes(include_bytes!("../tests/fonts/DejaVuSans.ttf").to_vec())
+    Font::from_sans_bytes(include_bytes!("../tests/fonts/DejaVuSans.ttf").to_vec())
         .expect("bundled DejaVuSans.ttf failed to load")
 }
 
 fn mono_font() -> Font {
-    Font::from_bytes(include_bytes!("../tests/fonts/DejaVuSansMono.ttf").to_vec())
+    Font::from_sans_bytes(include_bytes!("../tests/fonts/DejaVuSansMono.ttf").to_vec())
         .expect("bundled DejaVuSansMono.ttf failed to load")
 }
